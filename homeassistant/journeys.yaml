@@ -1,0 +1,83 @@
+# Journeys — Home Assistant package
+#
+# 1. Copy this file to /config/packages/journeys.yaml on your Home Assistant.
+# 2. Make sure configuration.yaml has:
+#      homeassistant:
+#        packages: !include_dir_named packages
+# 3. Replace JOURNEYS_SERVER below with your server's address, e.g. http://192.168.1.20:8080
+#    (Home Assistant talks to it on your local network, so plain http is fine here.)
+# 4. Developer tools → YAML → Check configuration, then restart Home Assistant.
+#
+# If you set APP_TOKEN on the Journeys server, uncomment the two `headers:` blocks and add this
+# to secrets.yaml:   journeys_auth: "Bearer <your APP_TOKEN>"
+
+rest:
+  - resource: JOURNEYS_SERVER/api/ha
+    scan_interval: 300
+    timeout: 20
+    # headers:
+    #   Authorization: !secret journeys_auth
+    sensor:
+      - name: Journeys active
+        unique_id: journeys_active
+        icon: mdi:timeline-clock-outline
+        state_class: measurement
+        value_template: "{{ value_json.active }}"
+        json_attributes:
+          - waiting
+          - done
+          - journeys
+          - updated
+      - name: Journeys waiting
+        unique_id: journeys_waiting
+        icon: mdi:timer-sand
+        state_class: measurement
+        value_template: "{{ value_json.waiting }}"
+
+template:
+  - sensor:
+      # The journey that has gone longest without an update, handy for tiles and announcements.
+      - name: Journeys longest wait
+        unique_id: journeys_longest_wait
+        icon: mdi:clock-alert-outline
+        unit_of_measurement: d
+        state: >
+          {% set j = state_attr('sensor.journeys_active', 'journeys') or [] %}
+          {{ j[0].days_since_last_step if j | count > 0 else 0 }}
+        attributes:
+          journey: >
+            {% set j = state_attr('sensor.journeys_active', 'journeys') or [] %}
+            {{ j[0].name if j | count > 0 else '' }}
+          step: >
+            {% set j = state_attr('sensor.journeys_active', 'journeys') or [] %}
+            {{ j[0].current_step if j | count > 0 else '' }}
+
+rest_command:
+  journeys_action:
+    url: JOURNEYS_SERVER/api/ha/action
+    method: POST
+    content_type: application/json
+    timeout: 20
+    payload: '{"action": {{ action | tojson }}, "reply": {{ reply | default("", true) | tojson }}}'
+    # headers:
+    #   Authorization: !secret journeys_auth
+
+automation:
+  # Sends nudge button taps (Interview / Other step… / Still waiting) back to the Journeys server.
+  - id: journeys_notification_action
+    alias: Journeys - notification buttons
+    mode: queued
+    triggers:
+      - trigger: event
+        event_type: mobile_app_notification_action
+    conditions:
+      - condition: template
+        value_template: "{{ (trigger.event.data.action | default('')).startswith('JOURNEY_') }}"
+    actions:
+      - action: rest_command.journeys_action
+        data:
+          action: "{{ trigger.event.data.action }}"
+          reply: "{{ trigger.event.data.reply_text | default('') }}"
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.journeys_active

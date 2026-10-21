@@ -4,7 +4,13 @@ FROM node:22-alpine
 ENV NODE_ENV=production \
     PORT=8080 \
     STATIC_DIR=/app/public \
-    GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/service-account.json
+    GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/service-account.json \
+    DATA_DIR=/data
+
+# Time zone data, so the time zone setting sets "today" and the nudge hour correctly.
+# /data holds settings changed in the app (Settings → Server settings).
+RUN apk add --no-cache tzdata \
+ && mkdir -p /data && chown node:node /data
 
 WORKDIR /app
 COPY server/server.js ./server.js

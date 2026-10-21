@@ -9,6 +9,10 @@ services:
     env_file: .env      # SPREADSHEET_ID, TZ and optional APP_TOKEN (copy .env.example to .env)
     volumes:
       - ./secrets/service-account.json:/run/secrets/service-account.json:ro
+      - journeys-data:/data   # settings changed in the app (Settings → Server settings)
     read_only: true
     security_opt:
       - no-new-privileges:true
+
+volumes:
+  journeys-data:

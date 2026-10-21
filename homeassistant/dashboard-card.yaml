@@ -1,0 +1,16 @@
+# Journeys dashboard card
+# Dashboard → Edit → Add card → Manual, then paste everything below this comment.
+type: markdown
+title: Journeys
+content: |
+  {% set js = state_attr('sensor.journeys_active', 'journeys') or [] %}
+  {% for j in js %}
+  **{{ j.name }}** · Day {{ j.day }}<br>
+  {% if j.snoozed_until %}{{ j.current_step }} · snoozed until {{ j.snoozed_until }}
+  {% elif j.waiting %}<ha-alert alert-type="warning">Waiting {{ j.days_since_last_step }} days on {{ j.current_step }}{% if j.usual_days is not none %} (usually {{ j.usual_days }}){% endif %}</ha-alert>
+  {% else %}{{ j.current_step }} · {{ 'today' if j.days_since_last_step == 0 else j.days_since_last_step ~ ' days ago' }}
+  {% endif %}
+
+  {% else %}
+  Nothing in progress.
+  {% endfor %}

@@ -10,7 +10,8 @@ journeys-app/
 ├── server/server.js      ← serves the app + talks to Google Sheets (no npm packages)
 ├── Dockerfile
 ├── docker-compose.yml
-├── .env.example          ← copy to .env: Sheet ID, time zone, optional token
+├── .env.example          ← copy to .env: Sheet ID, time zone, optional token, Home Assistant
+├── homeassistant/        ← package (sensors + button handling) and a dashboard card
 └── secrets/              ← put service-account.json here (git-ignored)
 ```
 
@@ -48,7 +49,7 @@ sudo chown 1000:1000 secrets/service-account.json   # the container runs as user
 chmod 600 secrets/service-account.json
 
 cp .env.example .env
-nano .env        # paste SPREADSHEET_ID; check TZ
+nano .env        # paste SPREADSHEET_ID and check TZ (both can also be set later in the app)
 
 docker compose up -d --build
 docker compose logs -f journeys
@@ -57,7 +58,7 @@ docker compose logs -f journeys
 The log should show:
 
 ```
-Journeys 2.0.0 listening on :8080
+Journeys 2.2.0 listening on :8080
 Using service account journeys@…iam.gserviceaccount.com — share your Sheet with it as Editor.
 ```
 
@@ -87,6 +88,88 @@ The VPN already keeps strangers out. If you also want a password, set `APP_TOKEN
 
 ---
 
+## 6. Home Assistant (optional)
+
+Two things, set up independently:
+
+- **Sensors and a dashboard card:** Home Assistant reads your journeys from the server.
+- **Nudges:** once a day, the server checks for journeys sitting on one step longer than usual, and sends a notification with buttons through the Home Assistant app on your phone:
+
+  > **Passport renewal: 12 days on Processing**
+  > That usually takes about 9 days. Any update?
+  > `Approved` · `Other step…` · `Still waiting`
+
+  - **Approved** (the likely next step) adds it with today's date.
+  - **Other step…** lets you type what happened.
+  - **Still waiting** snoozes it for 3 days.
+
+  "Usually" is learned from your own past journeys of the same type. Until there are at least two examples, a nudge comes after 7 days.
+
+### 6a. Let the server send notifications
+
+1. In Home Assistant, go to your **profile → Security → Long-lived access tokens → Create token**, and copy it.
+2. Find your phone's notify service: **Developer tools → Actions**, then search `notify.mobile_app`. It looks like `notify.mobile_app_pixel_8`.
+3. Add the token to `.env` on the Journeys server, then run `docker compose up -d`. It's a password, so it can only go in `.env`:
+   ```
+   HA_TOKEN=eyJ...
+   ```
+4. In the app, go to **Settings → Server settings → Home Assistant**. Enter the URL (e.g. `http://192.168.1.10:8123`; use the IP, since `.local` names often don't resolve in Docker) and the notify service (several phones: separate with commas). Then tap **Save**. You can also put these in `.env` as `HA_URL` and `HA_NOTIFY`.
+5. Back in **Settings**, a Home Assistant section appears. Use **Send test notification** to try it, or **Check now** to run the daily check immediately.
+
+### 6b. Add the package to Home Assistant
+
+The package makes the sensors and forwards button taps back to the server.
+
+1. Copy `homeassistant/journeys.yaml` to `/config/packages/journeys.yaml` (create the `packages` folder if needed).
+2. In `configuration.yaml`, make sure you have:
+   ```yaml
+   homeassistant:
+     packages: !include_dir_named packages
+   ```
+3. In `journeys.yaml`, replace both `JOURNEYS_SERVER` with your server's local address, e.g. `http://192.168.1.20:8080`. Home Assistant is on your network, so plain http is fine here.
+4. If you set `APP_TOKEN`, add `journeys_auth: "Bearer <your token>"` to `secrets.yaml` and uncomment the two `headers:` blocks.
+5. Go to **Developer tools → YAML → Check configuration**, then restart Home Assistant.
+
+You'll get:
+
+| Entity | What it is |
+|---|---|
+| `sensor.journeys_active` | Journeys in progress. Attributes hold each journey: day, current step, days since the last step, usual days, next step, steps |
+| `sensor.journeys_waiting` | How many are waiting longer than usual |
+| `sensor.journeys_longest_wait` | Days on the longest-waiting journey, with its name and step as attributes |
+
+### 6c. Dashboard card
+
+**Edit dashboard → Add card → Manual**, then paste `homeassistant/dashboard-card.yaml`. Each journey shows with its day count, and waiting ones are highlighted.
+
+### Ideas for automations
+
+The sensors work in any automation, for example:
+- Flash a light when `sensor.journeys_active` drops, meaning a journey finished.
+- Add `{{ state_attr('sensor.journeys_longest_wait', 'journey') }}` to a morning announcement on a speaker.
+
+---
+
+## Changing settings later
+
+Open the app, go to **Settings → Server settings**. From there you can change:
+
+| Setting | `.env` name |
+|---|---|
+| Google Sheet (paste the ID or the whole link) | `SPREADSHEET_ID` |
+| Time zone | `TZ` |
+| Home Assistant URL | `HA_URL` |
+| Notify service(s) | `HA_NOTIFY` |
+| Daily check hour | `NUDGE_HOUR` |
+| Nudge after (days) | `NUDGE_AFTER_DAYS` |
+| Ask again after (days) | `NUDGE_REPEAT_DAYS` |
+
+- **Changes apply right away** for every device, with no restart.
+- **When you switch Sheets,** the server first checks that the service account can open the new Sheet, and keeps the old one if it can't.
+- **Saved values take precedence over `.env`.** They're stored in the container's `journeys-data` volume, so they survive restarts and rebuilds. Each field shows whether it comes from `.env` or was set in the app, and has **Use .env value** to switch back.
+- **Secrets stay in `.env` only:** the JSON key, `HA_TOKEN` and `APP_TOKEN`. The screen shows whether each one is set, never its value.
+- **Lock it down:** anyone who can open the app can change these settings. That includes the Home Assistant URL, which is where your HA token gets sent. On your VPN that's only you, but setting `APP_TOKEN` locks it.
+
 ## How it works
 
 - **The Sheet is the source of truth.** Each step is one row in **Steps**. The server keeps rows sorted by journey and date, and fills in **Days from start** and **Days since previous**, so the Sheet reads well on its own.
@@ -109,3 +192,8 @@ The app's banner, Settings screen and `docker compose logs journeys` show the sa
 | *Can't reach your Journeys server* | You're off the VPN, or the container is down (`docker compose ps`). |
 | *This server needs an access token* | Enter `APP_TOKEN` under **Settings → Access token**. |
 | No "Install app" option on the phone | The address must be **https://** (step 4). |
+| *Can't reach Home Assistant at …* | Check `HA_URL`. Use the IP address and port 8123, reachable from the server. |
+| *Home Assistant rejected HA_TOKEN* | Create a new long-lived token and update `.env`. |
+| *Home Assistant has no notify service …* | Check `HA_NOTIFY` matches **Developer tools → Actions** (without `notify.`). |
+| Nudge buttons do nothing | The package isn't loaded, or `JOURNEYS_SERVER` is wrong. Check **Settings → System → Logs** for `rest_command`. |
+| Sensors show *unavailable* | Open `http://<server>:8080/api/ha` from the HA machine. It should show JSON. |

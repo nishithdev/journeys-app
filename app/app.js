@@ -26,6 +26,7 @@
     flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
     back: '<path d="M15 5l-7 7 7 7"/>',
+    chevron: '<path d="M9 5l7 7-7 7"/>',
     more: '<path d="M5 12h.01M12 12h.01M19 12h.01"/>',
     check: '<path d="M5 12l5 5 9-10"/>',
     close: '<path d="M6 6l12 12M18 6L6 18"/>',
@@ -150,6 +151,18 @@
     });
   }
 
+  function haCall(btn, url, describe) {
+    var label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Sending…';
+    var headers = {};
+    if (cfg.token) headers.Authorization = 'Bearer ' + cfg.token;
+    fetch(url, { method: 'POST', headers: headers, cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { toast(j.ok ? describe(j.payload) : j.error); },
+        function () { toast("Can't reach your Journeys server."); })
+      .then(function () { btn.disabled = false; btn.textContent = label; });
+  }
+
   // Is this copy of the app being served by a Journeys server?
   function probe() {
     return fetch('api/health', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }, function () { return null; })
@@ -208,7 +221,7 @@
     if (status === 'synced' || status === 'demo') state.sync.error = '';
     // Don't redraw a form the person is typing in; just refresh the status pill.
     var a = document.activeElement;
-    if (a && a.form && (a.form.id === 'new-form' || a.form.id === 'cfg-form')) {
+    if (a && a.form && (a.form.id === 'new-form' || a.form.id === 'cfg-form' || a.form.id === 'server-form')) {
       document.querySelectorAll('.sync').forEach(function (el) { el.outerHTML = syncPill(); });
       return;
     }
@@ -268,6 +281,7 @@
     if (h === '/new') return { name: 'new' };
     if (h === '/insights') return { name: 'insights' };
     if (h === '/settings') return { name: 'settings' };
+    if (h === '/server') return { name: 'server' };
     return { name: 'home' };
   }
   function go(hash) { if (location.hash !== hash) location.hash = hash; else render(); }
@@ -284,6 +298,7 @@
     else if (r.name === 'new') html = newScreen();
     else if (r.name === 'insights') html = insightsScreen() + tabbar('insights');
     else if (r.name === 'settings') html = settingsScreen() + tabbar('settings');
+    else if (r.name === 'server') html = serverScreen() + tabbar('settings');
     else html = homeScreen() + tabbar('home');
     var active = document.activeElement;
     var keepFocus = active && active.id && root.contains(active) ? { id: active.id, val: active.value, s: active.selectionStart } : null;
@@ -549,6 +564,16 @@
     }
     h += '</section>';
     var srv = state.server || {};
+    if (!isDemo() && srv.ha && srv.ha.enabled) {
+      h += '<section class="panel"><h2>Home Assistant</h2><p class="settings-help">Every day from ' + esc(String(srv.ha.nudgeHour)).replace(/^(\d)$/, '0$1') +
+        ':00, your server checks for journeys waiting longer than usual and sends a nudge to your phone through Home Assistant.</p>' +
+        '<div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn secondary small" type="button" data-action="ha-test">Send test notification</button>' +
+        '<button class="btn secondary small" type="button" data-action="ha-check">Check now</button></div></section>';
+    }
+    if (!isDemo()) {
+      h += '<a class="row-card" href="#/server"><div style="min-width:0"><div class="t">Server settings</div>' +
+        '<div class="s">Sheet, time zone, Home Assistant, nudge timing</div></div>' + icon('chevron', 20) + '</a>';
+    }
     if (!isDemo() && (srv.authRequired || cfg.token || s.status === 'error')) {
       h += '<section class="panel"><h2>Access token</h2><p class="settings-help">Only needed if your server has <code>APP_TOKEN</code> set.</p>' +
         '<form id="cfg-form" style="display:flex;flex-direction:column;gap:14px" novalidate>' +
@@ -561,8 +586,107 @@
         '<div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn secondary small" data-action="reset-demo">Reset sample data</button>' +
         '<button class="btn danger small" data-action="clear-demo">Clear all</button></div></section>';
     }
-    h += '<p class="settings-help" style="text-align:center">Journeys v2.0</p></main>';
+    h += '<p class="settings-help" style="text-align:center">Journeys v2.2</p></main>';
     return h;
+  }
+
+  // ---------- server settings (non-secret .env values, editable here) ----------
+  function settingsCall(method, body) {
+    var headers = { 'Content-Type': 'application/json' };
+    if (cfg.token) headers.Authorization = 'Bearer ' + cfg.token;
+    return fetch('api/settings', { method: method, headers: headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' })
+      .then(function (r) { return r.json(); }, function () { throw new Error("Can't reach your Journeys server."); })
+      .then(function (j) { if (!j.ok) { var e = new Error(j.error); e.kind = j.kind; throw e; } return j.payload; });
+  }
+  function loadServerSettings() {
+    state.serverSettings = { loading: true };
+    settingsCall('GET').then(function (p) { state.serverSettings = p; }, function (e) { state.serverSettings = { error: e.message, kind: e.kind }; })
+      .then(function () { if (route().name === 'server') render(); });
+  }
+  var TIME_ZONES = (function () {
+    try { return Intl.supportedValuesOf('timeZone'); } catch (e) { return []; }
+  })();
+  function hourLabel(h) { return pad(h) + ':00'; }
+
+  function serverScreen() {
+    var h = '<main class="screen"><div class="top"><a class="icon-btn" href="#/settings" aria-label="Back to settings">' + icon('back', 20, 2.2) + '</a></div>' +
+      '<div><h1 class="small">Server settings</h1><p class="settings-help" style="margin-top:6px">Saved on your Journeys server, for every device. Passwords and keys stay in the server\'s <code>.env</code>.</p></div>';
+    if (isDemo()) return h + '<p class="settings-help">Open the app from your Journeys server to change its settings.</p></main>';
+    var ss = state.serverSettings;
+    if (!ss || ss.loading) { if (!ss) loadServerSettings(); return h + '<p class="settings-help">Loading…</p></main>'; }
+    if (ss.error) {
+      return h + '<p class="error-text" role="alert">' + esc(ss.error) + '</p>' +
+        (ss.kind === 'auth' ? '<a class="btn secondary small" href="#/settings">Enter access token</a>' : '<button class="btn secondary small" data-action="reload-server-settings">Try again</button>') + '</main>';
+    }
+    var v = ss.values, env = ss.env, ov = ss.overridden || [], sec = ss.secrets || {};
+    function note(k, envText) {
+      if (ov.indexOf(k) >= 0) {
+        return '<span class="field-note">Set here · .env says ' + esc(envText) + ' <button type="button" class="linkish" data-action="reset-setting" data-k="' + k + '">Use .env value</button></span>';
+      }
+      return '<span class="field-note">From .env</span>';
+    }
+    function show(x) { return x === '' || x == null ? 'nothing' : String(x); }
+    var zones = TIME_ZONES.slice();
+    if (v.timeZone && zones.indexOf(v.timeZone) < 0) zones.unshift(v.timeZone);
+    var hours = [];
+    for (var i = 0; i < 24; i++) hours.push(i);
+
+    if (!ss.storage.writable) {
+      h += '<div class="banner error" role="alert"><span>Changes here will reset when the server restarts: it has no writable data volume. See the README.</span></div>';
+    }
+    if (!sec.appToken) {
+      h += '<div class="banner"><span>Anyone who can open this app can change these. To lock them, set <code>APP_TOKEN</code> in the server\'s .env.</span></div>';
+    }
+
+    h += '<form id="server-form" style="display:flex;flex-direction:column;gap:14px" novalidate>';
+    h += '<section class="panel"><h2>Google Sheet</h2>' +
+      '<div class="field"><label for="srv-sheet">Sheet ID or link</label><input class="input" id="srv-sheet" name="spreadsheetId" autocomplete="off" spellcheck="false" value="' + esc(v.spreadsheetId) + '" placeholder="https://docs.google.com/spreadsheets/d/…">' +
+      note('spreadsheetId', show(env.spreadsheetId)) + '</div>' +
+      '<p class="settings-help">Share the Sheet with ' + (sec.serviceAccountEmail ? '<code>' + esc(sec.serviceAccountEmail) + '</code>' : 'the service account') + ' as Editor first. The server checks it can open the Sheet before switching.</p>' +
+      '<div class="field"><label for="srv-tz">Time zone</label>' +
+      (zones.length
+        ? '<select class="input" id="srv-tz" name="timeZone">' + (v.timeZone ? '' : '<option value="" selected>Not set (UTC)</option>') +
+          zones.map(function (z) { return '<option value="' + esc(z) + '"' + (z === v.timeZone ? ' selected' : '') + '>' + esc(z.replace(/_/g, ' ')) + '</option>'; }).join('') + '</select>'
+        : '<input class="input" id="srv-tz" name="timeZone" value="' + esc(v.timeZone) + '" placeholder="America/Chicago">') +
+      note('timeZone', show(env.timeZone)) + '<span class="field-note">Sets what "today" means and when the daily check runs.</span></div>' +
+      '</section>';
+
+    h += '<section class="panel"><h2>Home Assistant</h2>' +
+      (sec.haToken ? '' : '<p class="settings-help">Nudges also need <code>HA_TOKEN</code> in the server\'s .env. It\'s a password, so it can\'t be set here.</p>') +
+      '<div class="field"><label for="srv-haurl">Home Assistant URL</label><input class="input" id="srv-haurl" name="haUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" value="' + esc(v.haUrl) + '" placeholder="http://192.168.1.10:8123">' +
+      note('haUrl', show(env.haUrl)) + '</div>' +
+      '<div class="field"><label for="srv-notify">Notify service</label><input class="input" id="srv-notify" name="haNotify" autocomplete="off" spellcheck="false" value="' + esc(v.haNotify) + '" placeholder="mobile_app_pixel_8">' +
+      note('haNotify', show(env.haNotify)) + '<span class="field-note">Several phones: separate with commas.</span></div>' +
+      '</section>';
+
+    h += '<section class="panel"><h2>Nudges</h2>' +
+      '<div class="field"><label for="srv-hour">Daily check</label><select class="input" id="srv-hour" name="nudgeHour">' +
+      hours.map(function (x) { return '<option value="' + x + '"' + (x === v.nudgeHour ? ' selected' : '') + '>' + hourLabel(x) + '</option>'; }).join('') + '</select>' +
+      note('nudgeHour', hourLabel(env.nudgeHour)) + '</div>' +
+      '<div class="field"><label for="srv-after">Nudge after (days on one step)</label><input class="input" id="srv-after" name="nudgeAfterDays" type="number" inputmode="numeric" min="1" max="365" step="1" value="' + esc(v.nudgeAfterDays) + '">' +
+      note('nudgeAfterDays', show(env.nudgeAfterDays)) + '<span class="field-note">Used until your history shows what\'s usual for that step.</span></div>' +
+      '<div class="field"><label for="srv-repeat">Ask again after (days)</label><input class="input" id="srv-repeat" name="nudgeRepeatDays" type="number" inputmode="numeric" min="1" max="365" step="1" value="' + esc(v.nudgeRepeatDays) + '">' +
+      note('nudgeRepeatDays', show(env.nudgeRepeatDays)) + '<span class="field-note">Also how long "Still waiting" snoozes.</span></div>' +
+      '</section>';
+
+    h += '<p class="error-text" id="srv-err" role="alert"></p><button class="btn" type="submit" style="flex:none">Save</button></form>';
+
+    h += '<section class="panel"><h2>Set in .env only</h2>' +
+      '<div class="wait-row"><span class="t">Google JSON key</span><span class="s" style="color:' + (sec.serviceAccountEmail ? 'var(--muted)' : 'var(--danger)') + '">' + (sec.serviceAccountEmail ? 'Loaded' : 'Problem') + '</span></div>' +
+      (sec.keyProblem ? '<p class="error-text">' + esc(sec.keyProblem) + '</p>' : '') +
+      '<div class="divider"></div><div class="wait-row"><span class="t">Home Assistant token</span><span class="s" style="color:var(--muted)">' + (sec.haToken ? 'Set' : 'Not set') + '</span></div>' +
+      '<div class="divider"></div><div class="wait-row"><span class="t">App token</span><span class="s" style="color:var(--muted)">' + (sec.appToken ? 'On' : 'Off') + '</span></div>' +
+      '</section>';
+    return h + '</main>';
+  }
+
+  function afterServerSave(p, sheetChanged) {
+    state.serverSettings = p;
+    probe().then(function () {
+      if (sheetChanged) { state.data = { journeys: [], steps: [] }; saveData(); }
+      render();
+      sync();
+    });
   }
 
   // ---------- step sheet ----------
@@ -691,6 +815,27 @@
       if (st.length === 1 && !window.confirm('This is the only step. Delete it anyway?')) return;
       deleteStep(sh.stepId); state.sheet = null; render(); toast('Step deleted');
     },
+    'reload-server-settings': function () { state.serverSettings = null; render(); },
+    'reset-setting': function (el) {
+      var k = el.dataset.k, body = { values: {} };
+      body.values[k] = null;
+      el.disabled = true;
+      var sheetChanged = k === 'spreadsheetId';
+      if (sheetChanged && state.outbox.length && !window.confirm(plural(state.outbox.length, 'change') + " haven't reached the current Sheet yet and will be discarded. Switch anyway?")) { el.disabled = false; return; }
+      settingsCall('POST', body).then(function (p) {
+        if (sheetChanged) { state.outbox = []; store(LS.outbox, []); }
+        toast('Using the .env value');
+        afterServerSave(p, sheetChanged);
+      }, function (e) { el.disabled = false; toast(e.message); });
+    },
+    'ha-test': function (el) {
+      haCall(el, 'api/ha/test', function () { return 'Test notification sent'; });
+    },
+    'ha-check': function (el) {
+      haCall(el, 'api/ha/check', function (p) {
+        return p.sent.length ? 'Nudged about ' + p.sent.join(', ') : 'Nothing is waiting longer than usual';
+      });
+    },
     'reset-demo': function () { state.data = sampleData(); saveData(); render(); toast('Sample data restored'); },
     'clear-demo': function () {
       if (!window.confirm('Remove all sample journeys from this device?')) return;
@@ -767,6 +912,26 @@
       state.newForm = null;
       go('#/j/' + id);
     }
+    if (f.id === 'server-form') {
+      var cur = state.serverSettings.values, changes = {}, errEl = document.getElementById('srv-err');
+      errEl.textContent = '';
+      ['spreadsheetId', 'timeZone', 'haUrl', 'haNotify', 'nudgeHour', 'nudgeAfterDays', 'nudgeRepeatDays'].forEach(function (k) {
+        var el = f.elements[k];
+        if (el && String(el.value).trim() !== String(cur[k] == null ? '' : cur[k])) changes[k] = el.value.trim();
+      });
+      if (!Object.keys(changes).length) { toast('No changes'); return; }
+      var sheetChanged = 'spreadsheetId' in changes;
+      if (sheetChanged && state.outbox.length && !window.confirm(plural(state.outbox.length, 'change') + " haven't reached the current Sheet yet and will be discarded. Switch anyway?")) return;
+      var sbtn = f.querySelector('[type=submit]'); sbtn.disabled = true; sbtn.textContent = sheetChanged ? 'Checking the Sheet…' : 'Saving…';
+      settingsCall('POST', { values: changes }).then(function (p) {
+        if (sheetChanged) { state.outbox = []; store(LS.outbox, []); }
+        toast(p.storage.saved ? 'Saved' : 'Saved until the server restarts');
+        afterServerSave(p, sheetChanged);
+      }, function (e) {
+        errEl.textContent = e.message;
+        sbtn.disabled = false; sbtn.textContent = 'Save';
+      });
+    }
     if (f.id === 'cfg-form') {
       var tokenVal = f.token.value.trim(), e3 = document.getElementById('cfg-err');
       e3.textContent = '';
@@ -792,7 +957,11 @@
     }
   });
 
-  window.addEventListener('hashchange', function () { state.menu = false; state.sheet = null; render(); window.scrollTo(0, 0); });
+  window.addEventListener('hashchange', function () {
+    state.menu = false; state.sheet = null;
+    if (route().name === 'server') state.serverSettings = null;
+    render(); window.scrollTo(0, 0);
+  });
   window.addEventListener('online', function () { sync(); });
   window.addEventListener('offline', function () { if (!isDemo()) setSync('offline'); });
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') sync(); });

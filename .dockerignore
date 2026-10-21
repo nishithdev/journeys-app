@@ -4,5 +4,6 @@
 secrets
 *service-account*.json
 README.md
+homeassistant
 docker-compose.yml
 *.zip

@@ -202,4 +202,11 @@ textarea.input:focus { padding: 13px 15px; }
 .toast { position: fixed; left: 50%; bottom: calc(var(--tabbar-h) + var(--safe-b) + 96px); transform: translateX(-50%); background: var(--ink); color: #fff; padding: 12px 16px; border-radius: 14px; font-size: 14px; font-weight: 600; z-index: 30; max-width: calc(100% - 40px); animation: fade .15s; }
 
 .settings-help { font-size: 13px; color: var(--muted); line-height: 1.5; margin: 0; }
+.field-note { font-size: 12px; color: var(--muted); line-height: 1.4; }
+.linkish { border: none; background: none; padding: 4px 2px; margin-left: 4px; color: var(--accent); font-size: 12px; font-weight: 700; text-decoration: underline; }
+select.input { appearance: none; -webkit-appearance: none; padding-right: 40px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%235B6478' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 14px center; font-size: 15px; }
+select.input:focus { padding-right: 39px; }
+.banner code { background: rgba(255, 255, 255, .6); padding: 1px 5px; border-radius: 6px; font-size: 12px; }
+a.row-card { text-decoration: none; }
+a.row-card svg { color: var(--muted); }
 .settings-help code { background: var(--bg); padding: 1px 6px; border-radius: 6px; font-size: 12px; }
