@@ -59,7 +59,7 @@ docker compose logs -f journeys
 The log should show:
 
 ```
-Journeys 2.3.0 listening on :8080
+Journeys 2.4.0 listening on :8080
 Using service account journeys@…iam.gserviceaccount.com — share your Sheet with it as Editor.
 ```
 
@@ -163,7 +163,7 @@ The server includes an [MCP](https://modelcontextprotocol.io) endpoint, so Claud
 | `get_journey` | One journey's steps with dates, day numbers, gaps and notes, plus what usually comes next |
 | `add_journey` | Start a journey with its first step |
 | `add_step` | Log a step (date defaults to today; `final` completes the journey) |
-| `update_step` / `update_journey` | Edit a step, or rename / finish / reopen a journey |
+| `update_step` / `update_journey` | Edit a step, or rename / finish / reopen a journey, or record how it ended |
 | `delete_step` / `delete_journey` | Remove things (marked destructive, so apps ask before running them) |
 | `get_insights` | What's waiting longer than usual, longest gaps, typical day each step is reached |
 
@@ -222,9 +222,20 @@ Open the app, go to **Settings → Server settings**. From there you can change:
 - **Secrets stay in `.env` only:** the JSON key, `HA_TOKEN` and `APP_TOKEN`. The screen shows whether each one is set, never its value.
 - **Lock it down:** anyone who can open the app can change these settings. That includes the Home Assistant URL, which is where your HA token gets sent. On your VPN that's only you, but setting `APP_TOKEN` locks it.
 
+## Using the app
+
+- **Search:** the magnifier on the home screen finds journeys, steps and notes as you type, with recent searches saved on the phone.
+- **Finishing a journey:** open the journey menu and choose **Finish journey…**, or tap **This finishes the journey…** when adding a step. Pick how it ended (**Got it**, **Rejected**, **Withdrew** or **Other**) and the last step is filled in for you. You can change the outcome later from the menu; reopening a journey clears it.
+- **Insights** has three views:
+  - **Overview:** totals, longest waits, typical timing, and outcome patterns per journey type, like *"Rejections usually come within 12 days"* or *"Reaching Interview matters most"*. Patterns appear once a few journeys end the same way.
+  - **Calendar:** steps across all journeys by month. Tap a day to see what happened.
+  - **Year:** your year in review, with steps per month, fastest and longest journeys, and how they ended. Switch years with the arrows.
+- **Share as an image:** from a journey's menu, or **Share** on the year view. Choose light or dark and whether to show dates, then save the PNG or send it with your phone's share sheet.
+
 ## How it works
 
 - **The Sheet is the source of truth.** Each step is one row in **Steps**. The server keeps rows sorted by journey and date, and fills in **Days from start** and **Days since previous**, so the Sheet reads well on its own.
+- **Outcomes** live in the **Outcome** column of the Journeys tab (`Got it`, `Rejected`, `Withdrew`, `Other`). The column is added automatically.
 - **Editing in the Sheet is fine.** The server re-reads the Sheet before every change, so edits made directly in the Sheet are kept. If you add rows by hand, give each one a unique ID in the first column (e.g. `S123`), and use an existing Journey ID for steps.
 - **Works offline.** Changes are saved on the phone first and sent when it can reach the server again, e.g. once you're back on the VPN. The pill at the top shows *Synced*, *2 to sync* or *Offline*.
 - **Several phones.** Open the same address on each one. The server saves changes one at a time, so they don't overwrite each other.

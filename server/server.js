@@ -42,11 +42,19 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || '/data');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const SHEETS_BASE = (process.env.SHEETS_API_BASE || 'https://sheets.googleapis.com/v4/spreadsheets').replace(/\/$/, '');
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
-const VERSION = '2.3.0';
+const VERSION = '2.4.0';
 const MCP_ALLOWED_ORIGINS = (process.env.MCP_ALLOWED_ORIGINS || '').split(',').map((x) => x.trim()).filter(Boolean);
 const NUDGE_CHECK_MS = intEnv('NUDGE_CHECK_MS', 10 * 60 * 1000, 200, 24 * 3600 * 1000);
 
-const JOURNEY_HEADERS = ['Journey ID', 'Journey', 'Type', 'Status', 'Created', 'Snoozed until', 'Last nudged'];
+const JOURNEY_HEADERS = ['Journey ID', 'Journey', 'Type', 'Status', 'Created', 'Snoozed until', 'Last nudged', 'Outcome'];
+// How a finished journey ended. Stored in the Sheet by label; the app and API use the id.
+const OUTCOMES = { got: 'Got it', rejected: 'Rejected', withdrew: 'Withdrew', other: 'Other' };
+function outcomeId(v) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if (!s) return '';
+  for (const [id, label] of Object.entries(OUTCOMES)) if (s === id || s === label.toLowerCase()) return id;
+  return 'other';
+}
 const STEP_HEADERS = ['Step ID', 'Journey ID', 'Journey', 'Step', 'Date', 'Days from start', 'Days since previous', 'Notes'];
 
 // Error kinds tell the app what to do with a queued change:
@@ -278,13 +286,13 @@ async function doSetup() {
   });
   await sheets('POST', '/values:batchUpdate', {
     valueInputOption: 'RAW',
-    data: [{ range: 'Journeys!A1:G1', values: [JOURNEY_HEADERS] }, { range: 'Steps!A1:H1', values: [STEP_HEADERS] }]
+    data: [{ range: 'Journeys!A1:H1', values: [JOURNEY_HEADERS] }, { range: 'Steps!A1:H1', values: [STEP_HEADERS] }]
   });
   console.log(`Sheet ready (tabs created: ${missing.join(', ') || 'none'})`);
 }
 
 async function readAll() {
-  const q = `?ranges=${encodeURIComponent('Journeys!A2:G')}&ranges=${encodeURIComponent('Steps!A2:H')}` +
+  const q = `?ranges=${encodeURIComponent('Journeys!A2:H')}&ranges=${encodeURIComponent('Steps!A2:H')}` +
     '&valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=SERIAL_NUMBER&majorDimension=ROWS';
   const r = await sheets('GET', `/values:batchGet${q}`);
   const [jr, sr] = (r.valueRanges || []).map((v) => v.values || []);
@@ -293,7 +301,7 @@ async function readAll() {
     rows: { j: (jr || []).length, s: (sr || []).length },
     journeys: (jr || []).filter(hasId).map((row) => ({
       id: String(row[0]).trim(), name: str(row[1]), type: str(row[2]), status: str(row[3]) || 'Active', created: toIso(row[4]),
-      snoozedUntil: toIso(row[5]), lastNudged: toIso(row[6])
+      snoozedUntil: toIso(row[5]), lastNudged: toIso(row[6]), outcome: outcomeId(row[7])
     })),
     steps: (sr || []).filter(hasId).map((row) => ({
       id: String(row[0]).trim(), journeyId: str(row[1]).trim(), step: str(row[3]), date: toIso(row[4]), notes: str(row[7])
@@ -308,7 +316,7 @@ async function writeAll(d) {
   const names = {};
   d.journeys.forEach((j) => { names[j.id] = j.name; });
   const dateCell = (s) => (validIso(s) ? toSerial(s) : '');
-  const jRows = d.journeys.map((j) => [j.id, j.name, j.type || '', j.status || 'Active', dateCell(j.created), dateCell(j.snoozedUntil), dateCell(j.lastNudged)]);
+  const jRows = d.journeys.map((j) => [j.id, j.name, j.type || '', j.status || 'Active', dateCell(j.created), dateCell(j.snoozedUntil), dateCell(j.lastNudged), OUTCOMES[j.outcome] || '']);
   const sorted = d.steps.map((s, i) => ({ s, i }))
     .sort((a, b) => cmp(names[a.s.journeyId] || '', names[b.s.journeyId] || '') || cmp(a.s.journeyId, b.s.journeyId) || cmp(a.s.date, b.s.date) || a.i - b.i)
     .map((x) => x.s);
@@ -353,7 +361,7 @@ function apply(b, d) {
       const name = clean(b.name, 200);
       if (!name) throw userError('Journey needs a name.');
       const id = clean(b.id, 40) || newId('J');
-      if (!findJ(id)) d.journeys.push({ id, name, type: clean(b.type, 40), status: 'Active', created: today(), snoozedUntil: '', lastNudged: '' });
+      if (!findJ(id)) d.journeys.push({ id, name, type: clean(b.type, 40), status: 'Active', created: today(), snoozedUntil: '', lastNudged: '', outcome: '' });
       if (b.firstStep) apply({ action: 'addStep', id: b.firstStepId, journeyId: id, step: b.firstStep, date: b.date, notes: b.notes }, d);
       return { id };
     }
@@ -362,7 +370,11 @@ function apply(b, d) {
       if (!j) throw userError('Journey not found.');
       if (b.name != null) { const n = clean(b.name, 200); if (!n) throw userError('Journey needs a name.'); j.name = n; }
       if (b.type != null) j.type = clean(b.type, 40);
-      if (b.status != null) j.status = b.status === 'Done' ? 'Done' : 'Active';
+      if (b.status != null) {
+        j.status = b.status === 'Done' ? 'Done' : 'Active';
+        if (j.status === 'Active') j.outcome = ''; // reopened: no outcome yet
+      }
+      if (b.outcome != null) j.outcome = parseOutcome(b.outcome);
       return { id: j.id };
     }
     case 'deleteJourney':
@@ -378,7 +390,7 @@ function apply(b, d) {
       const id = clean(b.id, 40) || newId('S');
       if (findS(id)) return { id }; // already saved (a retry from the offline queue)
       d.steps.push({ id, journeyId: j.id, step, date: b.date, notes: clean(b.notes, 5000) });
-      if (b.final) j.status = 'Done';
+      if (b.final) { j.status = 'Done'; if (b.outcome != null) j.outcome = parseOutcome(b.outcome); }
       j.snoozedUntil = ''; // something happened, so any snooze is over
       return { id };
     }
@@ -396,6 +408,14 @@ function apply(b, d) {
     default:
       throw userError(`Unknown action: ${b.action}`);
   }
+}
+
+function parseOutcome(v) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if (!s) return '';
+  const id = outcomeId(s);
+  if (!(s in OUTCOMES) && !Object.values(OUTCOMES).some((l) => l.toLowerCase() === s)) throw userError('Outcome must be got, rejected, withdrew or other.');
+  return id;
 }
 
 // One change at a time, so two phones (or a phone and Home Assistant) can't overwrite each other.

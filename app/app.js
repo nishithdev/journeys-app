@@ -3,7 +3,7 @@
   'use strict';
 
   // ---------- constants ----------
-  var LS = { config: 'jt.config', data: 'jt.data', outbox: 'jt.outbox', demo: 'jt.demo', mode: 'jt.mode' };
+  var LS = { config: 'jt.config', data: 'jt.data', outbox: 'jt.outbox', demo: 'jt.demo', mode: 'jt.mode', recent: 'jt.recent' };
   var WAIT_WARN_DAYS = 7;
   var TYPES = [
     { id: 'Job', icon: 'briefcase', first: 'Applied', steps: ['Applied', 'Interview', 'Background check', 'Offer letter', 'Joined', 'Rejected'] },
@@ -15,6 +15,24 @@
     { id: 'Other', icon: 'flag', first: 'Started', steps: ['Started', 'In progress', 'Done'] }
   ];
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  var WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  // How a finished journey ended. `got` is the default last-step name per journey type.
+  var OUTCOMES = [
+    { id: 'got', label: 'Got it', hint: 'Offer, approval, done', icon: 'check', cls: 'got',
+      got: { Job: 'Joined', Home: 'Moved in', Documents: 'Received', Travel: 'Returned', Health: 'Recovered', Purchase: 'Delivered', Other: 'Done' } },
+    { id: 'rejected', label: 'Rejected', hint: 'They said no', icon: 'close', cls: 'rejected', step: 'Rejected' },
+    { id: 'withdrew', label: 'Withdrew', hint: 'You stepped away', icon: 'undo', cls: 'withdrew', step: 'Withdrew' },
+    { id: 'other', label: 'Other', hint: 'Closed, expired…', icon: 'more', cls: 'other', step: 'Closed' }
+  ];
+  function outcomeOf(id) { return OUTCOMES.find(function (o) { return o.id === id; }) || null; }
+  function finalStepFor(outcomeId, type) {
+    var o = outcomeOf(outcomeId);
+    if (!o) return '';
+    return o.got ? (o.got[type] || 'Done') : o.step;
+  }
+  // Calendar colors for journeys; each also differs in lightness so dots stay distinguishable.
+  var JOURNEY_COLORS = ['#2451D6', '#E8833A', '#0F8A7A', '#9B3FB5', '#C2372B', '#6B7A12', '#5B6478'];
 
   var ICONS = {
     briefcase: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>',
@@ -34,7 +52,12 @@
     chart: '<path d="M5 20V11M12 20V4M19 20v-6"/>',
     gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-    sync: '<path d="M20 11a8 8 0 0 0-14.7-4.4M4 4v4h4M4 13a8 8 0 0 0 14.7 4.4M20 20v-4h-4"/>'
+    sync: '<path d="M20 11a8 8 0 0 0-14.7-4.4M4 4v4h4M4 13a8 8 0 0 0 14.7 4.4M20 20v-4h-4"/>',
+    search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
+    undo: '<path d="M9 14l-4-4 4-4"/><path d="M5 10h9a5 5 0 0 1 0 10h-2"/>',
+    share: '<path d="M12 3v12M7 8l5-5 5 5M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/>',
+    download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+    flagDone: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/><path d="M9 7l1.5 1.5L13 6"/>'
   };
   function icon(name, size, sw) {
     return '<svg aria-hidden="true" width="' + (size || 20) + '" height="' + (size || 20) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="' + (sw || 2) + '" stroke-linecap="round" stroke-linejoin="round">' + ICONS[name] + '</svg>';
@@ -86,7 +109,10 @@
     server: null,
     filter: 'all',
     sheet: null,
-    menu: false
+    menu: false,
+    search: { q: '' },
+    cal: null,     // { y, m, sel } — month shown in the calendar and the selected day
+    year: null     // year shown in Year in review
   };
   function isDemo() { return mode !== 'server'; }
   if (!state.data) state.data = isDemo() ? sampleData() : { journeys: [], steps: [] };
@@ -98,13 +124,21 @@
     var j = [
       { id: 'Jdemo1', name: 'Acme Corp', type: 'Job', status: 'Active' },
       { id: 'Jdemo2', name: 'Passport renewal', type: 'Documents', status: 'Active' },
-      { id: 'Jdemo3', name: 'Lakeview apartment', type: 'Home', status: 'Done' }
+      { id: 'Jdemo3', name: 'Lakeview apartment', type: 'Home', status: 'Done', outcome: 'got' },
+      { id: 'Jdemo4', name: 'Globex', type: 'Job', status: 'Done', outcome: 'rejected' },
+      { id: 'Jdemo5', name: 'Initech', type: 'Job', status: 'Done', outcome: 'withdrew' },
+      { id: 'Jdemo6', name: 'Hooli', type: 'Job', status: 'Done', outcome: 'rejected' },
+      { id: 'Jdemo7', name: 'Umbrella Labs', type: 'Job', status: 'Done', outcome: 'got' }
     ];
     var s = [
       ['Jdemo1', 'Applied', -25, 'Via LinkedIn'], ['Jdemo1', 'Interview', -15, '2 rounds, panel + manager'],
       ['Jdemo1', 'Background check', -5, ''], ['Jdemo1', 'Offer letter', 0, ''],
       ['Jdemo2', 'Submitted', -15, 'Online, paid expedite fee'], ['Jdemo2', 'Processing', -12, ''],
-      ['Jdemo3', 'Applied', -80, ''], ['Jdemo3', 'Approved', -77, ''], ['Jdemo3', 'Moved in', -61, 'Unit 4B']
+      ['Jdemo3', 'Applied', -80, ''], ['Jdemo3', 'Approved', -77, ''], ['Jdemo3', 'Moved in', -61, 'Unit 4B'],
+      ['Jdemo4', 'Applied', -230, ''], ['Jdemo4', 'Phone interview', -223, 'Recruiter: Priya. Asked about remote work'], ['Jdemo4', 'Rejected', -218, ''],
+      ['Jdemo5', 'Applied', -200, ''], ['Jdemo5', 'Interview', -189, 'Onsite, 4 hours'], ['Jdemo5', 'Withdrew', -182, 'Took a different offer'],
+      ['Jdemo6', 'Applied', -150, ''], ['Jdemo6', 'Rejected', -141, 'Form email'],
+      ['Jdemo7', 'Applied', -400, ''], ['Jdemo7', 'Interview', -388, ''], ['Jdemo7', 'Offer letter', -374, ''], ['Jdemo7', 'Joined', -360, '']
     ].map(function (r, i) { return { id: 'Sdemo' + i, journeyId: r[0], step: r[1], date: addDays(t, r[2]), notes: r[3] }; });
     j.forEach(function (x) { x.created = s.find(function (y) { return y.journeyId === x.id; }).date; });
     return { journeys: j, steps: s };
@@ -244,11 +278,13 @@
     });
     return id;
   }
-  function addStep(jid, step, date, notes, final) {
+  function addStep(jid, step, date, notes, final, outcome) {
     var id = uid('S');
-    mutate({ action: 'addStep', id: id, journeyId: jid, step: step, date: date, notes: notes, final: !!final }, function (d) {
+    var op = { action: 'addStep', id: id, journeyId: jid, step: step, date: date, notes: notes, final: !!final };
+    if (final && outcome) op.outcome = outcome;
+    mutate(op, function (d) {
       d.steps.push({ id: id, journeyId: jid, step: step, date: date, notes: notes });
-      if (final) d.journeys.forEach(function (j) { if (j.id === jid) j.status = 'Done'; });
+      if (final) d.journeys.forEach(function (j) { if (j.id === jid) { j.status = 'Done'; j.outcome = outcome || ''; } });
     });
   }
   function updateStep(id, step, date, notes) {
@@ -263,7 +299,11 @@
   }
   function updateJourney(id, fields) {
     mutate(Object.assign({ action: 'updateJourney', id: id }, fields), function (d) {
-      d.journeys.forEach(function (j) { if (j.id === id) Object.assign(j, fields); });
+      d.journeys.forEach(function (j) {
+        if (j.id !== id) return;
+        Object.assign(j, fields);
+        if (fields.status === 'Active') j.outcome = ''; // reopened: no outcome yet
+      });
     });
   }
   function deleteJourney(id) {
@@ -280,6 +320,9 @@
     if ((m = /^\/j\/([\w-]+)$/.exec(h))) return { name: 'journey', id: m[1] };
     if (h === '/new') return { name: 'new' };
     if (h === '/insights') return { name: 'insights' };
+    if (h === '/insights/calendar') return { name: 'calendar' };
+    if (h === '/insights/year') return { name: 'year' };
+    if (h === '/search') return { name: 'search' };
     if (h === '/settings') return { name: 'settings' };
     if (h === '/server') return { name: 'server' };
     return { name: 'home' };
@@ -297,6 +340,9 @@
     if (r.name === 'journey') html = journeyScreen(r.id);
     else if (r.name === 'new') html = newScreen();
     else if (r.name === 'insights') html = insightsScreen() + tabbar('insights');
+    else if (r.name === 'calendar') html = calendarScreen() + tabbar('insights');
+    else if (r.name === 'year') html = yearScreen() + tabbar('insights');
+    else if (r.name === 'search') html = searchScreen() + tabbar('home');
     else if (r.name === 'settings') html = settingsScreen() + tabbar('settings');
     else if (r.name === 'server') html = serverScreen() + tabbar('settings');
     else html = homeScreen() + tabbar('home');
@@ -359,7 +405,8 @@
     var dateLabel = d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
 
     var h = '<main class="screen">' +
-      '<div class="top"><div><div class="eyebrow">' + esc(dateLabel) + '</div><h1>Journeys</h1></div>' + syncPill() + '</div>' +
+      '<div class="top"><div><div class="eyebrow">' + esc(dateLabel) + '</div><h1>Journeys</h1></div>' +
+      '<div class="top-actions"><a class="icon-btn" href="#/search" aria-label="Search journeys, steps and notes">' + icon('search', 20) + '</a>' + syncPill() + '</div></div>' +
       banner() +
       '<div class="chips" role="group" aria-label="Filter">' +
       filterChip('all', 'All · ' + all.length) + filterChip('active', 'In progress · ' + active.length) + filterChip('done', 'Done · ' + done.length) +
@@ -389,7 +436,7 @@
       done.forEach(function (ii) {
         h += '<a class="row-card" href="#/j/' + esc(ii.j.id) + '"><div style="min-width:0"><div class="t">' + esc(ii.j.name) + '</div>' +
           '<div class="s">' + (ii.first ? esc(ii.first.step) + ' → ' + esc(ii.last.step) + ' · ' : '') + plural(ii.steps.length, 'step') + '</div></div>' +
-          '<div class="v">' + plural(ii.total, 'day') + '</div></a>';
+          '<div class="v">' + outcomeBadge(ii.j.outcome) + plural(ii.total, 'day') + '</div></a>';
       });
     }
     if (all.length && f === 'active' && !active.length) h += '<div class="empty"><p>Nothing in progress right now.</p></div>';
@@ -417,10 +464,15 @@
     if (state.menu) {
       h += '<div class="menu" role="menu">' +
         '<button role="menuitem" data-action="rename">Rename</button>' +
-        '<button role="menuitem" data-action="toggle-done">' + (ii.done ? 'Reopen journey' : 'Mark as done') + '</button>' +
+        (ii.done
+          ? '<button role="menuitem" data-action="change-outcome">' + (j.outcome ? 'Change outcome' : 'Add outcome') + '</button>' +
+            '<button role="menuitem" data-action="toggle-done">Reopen journey</button>'
+          : '<button role="menuitem" data-action="finish">Finish journey…</button>') +
+        (ii.steps.length ? '<button role="menuitem" data-action="share-journey">Share as image</button>' : '') +
         '<button role="menuitem" class="danger" data-action="delete-journey">Delete journey</button></div>';
     }
-    h += '<div><div class="kicker">' + esc(t.id) + (ii.done ? ' · Done' : '') + '</div><h1 class="small">' + esc(j.name) + '</h1></div>';
+    h += '<div><div class="kicker">' + esc(t.id) + (ii.done ? ' · Done' : '') + '</div><h1 class="small">' + esc(j.name) + '</h1>' +
+      (ii.done && j.outcome ? '<div style="margin-top:8px">' + outcomeBadge(j.outcome, true) + '</div>' : '') + '</div>';
     h += '<div class="stats">' +
       '<div class="stat"><b>' + (ii.done ? ii.total : ii.daysIn) + '<small> days</small></b><span>' + (ii.done ? 'Start to finish' : 'So far') + '</span></div>' +
       '<div class="stat"><b>' + ii.steps.length + '</b><span>' + (ii.steps.length === 1 ? 'Step' : 'Steps') + '</span></div>' +
@@ -502,7 +554,7 @@
     all.forEach(function (ii) { ii.gaps.forEach(function (g, i) { gaps.push({ ii: ii, g: g, from: ii.steps[i].step, to: ii.steps[i + 1].step }); }); });
     var avg = gaps.length ? gaps.reduce(function (a, x) { return a + x.g; }, 0) / gaps.length : null;
 
-    var h = '<main class="screen"><div class="top"><h1>Insights</h1>' + syncPill() + '</div>' +
+    var h = '<main class="screen"><div class="top"><h1>Insights</h1>' + syncPill() + '</div>' + insightsTabs('insights') +
       '<div class="tiles"><div class="tile"><span>Journeys done</span><b>' + done.length + '</b></div>' +
       '<div class="tile"><span>Avg. days between steps</span><b>' + (avg == null ? '–' : (Math.round(avg * 10) / 10)) + '</b></div></div>';
 
@@ -515,6 +567,7 @@
         plural(x.v, 'day') + (x.ii.done ? '' : ' so far') + '</span></div>' +
         '<div class="track"><div class="fill' + (x.ii.done ? '' : ' ongoing') + '" style="width:' + Math.max(3, Math.round(x.v / max * 100)) + '%"></div></div></a>';
     }).join('') + '</section>';
+    h += outcomesPanel();
 
     var waits = gaps.filter(function (x) { return x.g > 0; }).map(function (x) { return { name: x.ii.j.name + ' · ' + x.from + ' → ' + x.to, v: x.g, ongoing: false, id: x.ii.j.id }; });
     all.forEach(function (ii) { if (!ii.done && ii.sinceLast > 0) waits.push({ name: ii.j.name + ' · after ' + ii.last.step, v: ii.sinceLast, ongoing: true, id: ii.j.id }); });
@@ -593,7 +646,7 @@
         '<div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn secondary small" data-action="reset-demo">Reset sample data</button>' +
         '<button class="btn danger small" data-action="clear-demo">Clear all</button></div></section>';
     }
-    h += '<p class="settings-help" style="text-align:center">Journeys v2.3</p></main>';
+    h += '<p class="settings-help" style="text-align:center">Journeys v2.4</p></main>';
     return h;
   }
 
@@ -696,6 +749,582 @@
     });
   }
 
+  // ---------- shared bits for the new screens ----------
+  function median(xs) {
+    var s = xs.slice().sort(function (a, b) { return a - b; }), m = s.length >> 1;
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  }
+  function outcomeBadge(id, big) {
+    var o = outcomeOf(id);
+    return o ? '<span class="outcome-badge ' + o.cls + (big ? ' big' : '') + '">' + esc(o.label) + '</span>' : '';
+  }
+  function journeyById(id) { return state.data.journeys.find(function (x) { return x.id === id; }); }
+  function typeWord(type) { return !type || type === 'Other' ? 'journey' : type.toLowerCase(); }
+  function mostCommonFirstStep(list) {
+    var c = {};
+    list.forEach(function (ii) { var n = ii.steps[0].step; c[n] = (c[n] || 0) + 1; });
+    return Object.keys(c).sort(function (a, b) { return c[b] - c[a]; })[0] || 'the start';
+  }
+
+  // ---------- search ----------
+  function recentSearches() { var r = load(LS.recent, []); return Array.isArray(r) ? r : []; }
+  function rememberSearch(q) {
+    q = (q || '').trim();
+    if (!q) return;
+    var r = recentSearches().filter(function (x) { return x.toLowerCase() !== q.toLowerCase(); });
+    r.unshift(q);
+    store(LS.recent, r.slice(0, 6));
+  }
+  function searchScreen() {
+    var q = state.search.q;
+    return '<main class="screen"><form id="search-form" class="search-bar" role="search" novalidate>' +
+      '<a class="icon-btn" href="#/" aria-label="Back to journeys">' + icon('back', 20, 2.2) + '</a>' +
+      '<div class="search-field">' + icon('search', 18) +
+      '<label for="search-q" class="sr-only">Search journeys, steps and notes</label>' +
+      '<input id="search-q" class="input" type="search" name="q" enterkeyhint="search" autocomplete="off" spellcheck="false" placeholder="Journeys, steps, notes" value="' + esc(q) + '">' +
+      '<button type="button" class="search-clear" data-action="search-clear" aria-label="Clear search">' + icon('close', 14, 2.6) + '</button></div></form>' +
+      '<div id="search-results" aria-live="polite">' + searchResultsHtml(q) + '</div></main>';
+  }
+  function searchResultsHtml(q) {
+    var t = (q || '').trim();
+    if (!t) {
+      var rec = recentSearches();
+      if (!rec.length) return '<p class="settings-help" style="padding:4px 2px">Search journey names, step names and notes, e.g. a company, a person or a word you wrote down.</p>';
+      return '<div class="section-label" style="display:flex;justify-content:space-between;align-items:center">Recent searches' +
+        '<button type="button" class="linkish" data-action="search-clear-recent">Clear</button></div>' +
+        '<div class="chips">' + rec.map(function (r) { return '<button type="button" class="chip" data-action="search-recent" data-v="' + esc(r) + '">' + esc(r) + '</button>'; }).join('') + '</div>';
+    }
+    var lq = t.toLowerCase();
+    function hl(text) {
+      text = String(text || '');
+      var i = text.toLowerCase().indexOf(lq);
+      return i < 0 ? null : esc(text.slice(0, i)) + '<mark>' + esc(text.slice(i, i + t.length)) + '</mark>' + esc(text.slice(i + t.length));
+    }
+    function snippet(text) {
+      var i = text.toLowerCase().indexOf(lq);
+      if (i < 0) return null;
+      var start = Math.max(0, i - 24), end = Math.min(text.length, i + t.length + 32);
+      return (start ? '…' : '') + esc(text.slice(start, i)) + '<mark>' + esc(text.slice(i, i + t.length)) + '</mark>' + esc(text.slice(i + t.length, end)) + (end < text.length ? '…' : '');
+    }
+    var infos = {};
+    state.data.journeys.forEach(function (j) { infos[j.id] = info(j); });
+    var js = [], ss = [], ns = [];
+    state.data.journeys.forEach(function (j) {
+      var m = hl(j.name);
+      if (!m) return;
+      var ii = infos[j.id];
+      js.push({ j: j, html: m, sub: esc(j.type || 'Other') + ' · ' + (ii.done ? plural(ii.total, 'day') + (j.outcome ? ' · ' + esc(outcomeOf(j.outcome).label) : '') : (ii.last ? 'Day ' + ii.daysIn + ' · ' + esc(ii.last.step) : 'No steps yet')), done: ii.done });
+    });
+    state.data.steps.forEach(function (s) {
+      var j = infos[s.journeyId];
+      if (!j) return;
+      var day = j.first ? days(j.first.date, s.date) : 0;
+      var m = hl(s.step);
+      if (m) ss.push({ s: s, j: j.j, html: m, day: day });
+      var n = s.notes ? snippet(s.notes) : null;
+      if (n) ns.push({ s: s, j: j.j, html: n });
+    });
+    ss.sort(function (a, b) { return a.s.date < b.s.date ? 1 : -1; });
+    ns.sort(function (a, b) { return a.s.date < b.s.date ? 1 : -1; });
+    var total = js.length + ss.length + ns.length;
+    if (!total) return '<div class="empty"><h2>No matches</h2><p>Nothing in your journeys, steps or notes mentions “' + esc(t) + '”.</p></div>';
+    function open(j, inner, cls) { return '<a class="' + cls + '" href="#/j/' + esc(j.id) + '" data-action="search-open" data-href="#/j/' + esc(j.id) + '">' + inner + '</a>'; }
+    var h = '<p class="muted-sm" style="margin:0 2px">' + plural(total, 'match').replace('matchs', 'matches') + '</p>';
+    if (js.length) {
+      h += '<div class="section-label">Journeys</div>' + js.map(function (x) {
+        return open(x.j, '<div style="min-width:0"><div class="t">' + x.html + '</div><div class="s">' + x.sub + '</div></div>' +
+          '<span class="pill ' + (x.done ? 'pill-muted' : 'pill-accent') + '">' + (x.done ? 'Done' : 'Active') + '</span>', 'row-card');
+      }).join('');
+    }
+    if (ss.length) {
+      h += '<div class="section-label">Steps</div><div class="result-list">' + ss.slice(0, 40).map(function (x) {
+        return open(x.j, '<span class="dot-sm"></span><span class="rl-body"><span class="rl-row"><span class="t">' + x.html + '</span><span class="s">' + esc(fmt(x.s.date)) + '</span></span>' +
+          '<span class="s">' + esc(x.j.name) + ' · Day ' + x.day + '</span></span>', 'result-row');
+      }).join('') + '</div>';
+    }
+    if (ns.length) {
+      h += '<div class="section-label">Notes</div><div class="result-list">' + ns.slice(0, 40).map(function (x) {
+        return open(x.j, '<span class="rl-body"><span class="note-text">“' + x.html + '”</span><span class="s">' + esc(x.j.name) + ' · ' + esc(x.s.step) + ' · ' + esc(fmt(x.s.date)) + '</span></span>', 'result-row');
+      }).join('') + '</div>';
+    }
+    return h;
+  }
+
+  // ---------- insights: tabs, outcomes ----------
+  function insightsTabs(cur) {
+    var tabs = [['insights', '#/insights', 'Overview'], ['calendar', '#/insights/calendar', 'Calendar'], ['year', '#/insights/year', 'Year']];
+    return '<nav class="seg" aria-label="Insights views">' + tabs.map(function (x) {
+      return x[0] === cur ? '<span class="seg-item" aria-current="page">' + x[2] + '</span>' : '<a class="seg-item" href="' + x[1] + '">' + x[2] + '</a>';
+    }).join('') + '</nav>';
+  }
+
+  function outcomePatterns(type, list) {
+    var res = [];
+    var start = mostCommonFirstStep(list);
+    OUTCOMES.forEach(function (o) {
+      if (o.id === 'other') return;
+      var xs = list.filter(function (ii) { return ii.j.outcome === o.id; }).map(function (ii) { return ii.total; }).sort(function (a, b) { return a - b; });
+      if (xs.length < 2) return;
+      var med = Math.round(median(xs));
+      var within = xs[Math.min(xs.length - 1, Math.ceil(xs.length * 0.75) - 1)];
+      var k = xs.filter(function (x) { return x <= within; }).length;
+      if (o.id === 'rejected') res.push({ cls: o.cls, title: 'Rejections usually come within ' + plural(within, 'day'), sub: 'Typically ' + plural(med, 'day') + ' after ' + start + ' · ' + k + ' of ' + xs.length + ' rejections' });
+      if (o.id === 'got') res.push({ cls: o.cls, title: 'Getting it takes about ' + plural(med, 'day'), sub: 'Typical time from ' + start + ' to the end · ' + xs.length + ' times' });
+      if (o.id === 'withdrew') res.push({ cls: o.cls, title: 'You usually stepped away after about ' + plural(med, 'day'), sub: xs.length + ' times' });
+    });
+    // Which middle step most separates "got it" from the rest?
+    var got = list.filter(function (ii) { return ii.j.outcome === 'got'; }).length;
+    if (list.length >= 4 && got > 0 && got < list.length) {
+      var names = {};
+      list.forEach(function (ii) { ii.steps.slice(1, -1).forEach(function (s) { names[s.step.trim().toLowerCase()] = s.step.trim(); }); });
+      var best = null;
+      Object.keys(names).forEach(function (k) {
+        var has = function (ii) { return ii.steps.slice(1, -1).some(function (s) { return s.step.trim().toLowerCase() === k; }); };
+        var w = list.filter(has), wo = list.filter(function (ii) { return !has(ii); });
+        if (w.length < 2 || !wo.length) return;
+        var a = w.filter(function (ii) { return ii.j.outcome === 'got'; }).length, c = wo.filter(function (ii) { return ii.j.outcome === 'got'; }).length;
+        var diff = a / w.length - c / wo.length;
+        if (diff >= 0.3 && (!best || diff > best.diff)) best = { diff: diff, name: names[k], a: a, b: w.length, c: c, d: wo.length };
+      });
+      if (best) res.push({ cls: 'accent', title: 'Reaching ' + best.name + ' matters most', sub: best.a + ' of ' + best.b + ' with ' + best.name + ' ended in Got it, ' + best.c + ' of ' + best.d + ' without' });
+    }
+    return res;
+  }
+
+  function outcomesPanel() {
+    var decided = allInfo().filter(function (ii) { return ii.done && ii.j.outcome && ii.steps.length; });
+    if (!decided.length) return '';
+    var byType = {};
+    decided.forEach(function (ii) { var t = ii.j.type || 'Other'; (byType[t] = byType[t] || []).push(ii); });
+    return Object.keys(byType).sort(function (a, b) { return byType[b].length - byType[a].length; }).map(function (type) {
+      var list = byType[type], counts = {};
+      list.forEach(function (ii) { counts[ii.j.outcome] = (counts[ii.j.outcome] || 0) + 1; });
+      var present = OUTCOMES.filter(function (o) { return counts[o.id]; });
+      var pats = outcomePatterns(type, list);
+      return '<section class="panel"><div class="panel-head"><h2>' + esc(type === 'Other' ? 'Other' : type) + ' outcomes</h2><span class="muted-sm">All time · ' + list.length + ' decided</span></div>' +
+        '<div class="outcome-bar" role="img" aria-label="' + esc(present.map(function (o) { return o.label + ' ' + counts[o.id]; }).join(', ')) + '">' +
+        present.map(function (o) { return '<span class="ob ' + o.cls + '" style="flex:' + counts[o.id] + '"></span>'; }).join('') + '</div>' +
+        '<div class="outcome-legend">' + present.map(function (o) { return '<span><i class="ob ' + o.cls + '"></i><b>' + counts[o.id] + '</b> ' + esc(o.label) + '</span>'; }).join('') + '</div>' +
+        (pats.length ? '<div class="divider"></div>' + pats.map(function (p, i) {
+          return (i ? '<div class="divider"></div>' : '') + '<div class="pattern"><i class="ob ' + p.cls + '"></i><div><div class="t">' + esc(p.title) + '</div><div class="s">' + esc(p.sub) + '</div></div></div>';
+        }).join('') : '<p class="settings-help">Patterns show up once a few journeys end the same way.</p>') +
+        '</section>';
+    }).join('');
+  }
+
+  // A line for the finish sheet: what this outcome usually looks like for this kind of journey.
+  function outcomeHint(j, outcomeId) {
+    var ii = info(j), o = outcomeOf(outcomeId);
+    var here = ii.first ? 'This one is at Day ' + days(ii.first.date, today()) + '. ' : '';
+    if (!o) return here + 'Pick how it ended. It helps Insights spot patterns.';
+    var xs = allInfo().filter(function (x) { return x.j.id !== j.id && x.done && x.j.outcome === o.id && (x.j.type || 'Other') === (j.type || 'Other') && x.steps.length; })
+      .map(function (x) { return x.total; }).sort(function (a, b) { return a - b; });
+    var w = typeWord(j.type);
+    if (xs.length >= 2) {
+      var med = Math.round(median(xs)), within = xs[Math.min(xs.length - 1, Math.ceil(xs.length * 0.75) - 1)];
+      if (o.id === 'rejected') return here + 'Your ' + w + ' rejections usually come within ' + plural(within, 'day') + '.';
+      if (o.id === 'got') return here + 'Your ' + w + ' journeys that worked out took about ' + plural(med, 'day') + '.';
+      if (o.id === 'withdrew') return here + 'You usually stepped away after about ' + plural(med, 'day') + '.';
+      return here + plural(xs.length, 'other ' + w) + ' ended this way.';
+    }
+    if (xs.length === 1) return here + 'Your other ' + w + ' that ended this way took ' + plural(xs[0], 'day') + '.';
+    return here + 'Outcomes help Insights spot patterns as you finish more journeys.';
+  }
+
+  // ---------- calendar ----------
+  function calendarScreen() {
+    var now = today();
+    if (!state.cal) state.cal = { y: +now.slice(0, 4), m: +now.slice(5, 7) - 1, sel: now };
+    var c = state.cal;
+    var monthKey = c.y + '-' + pad(c.m + 1);
+    var byDay = {}, inMonth = {};
+    state.data.steps.forEach(function (s) {
+      if (!validIso(s.date) || s.date.slice(0, 7) !== monthKey || !journeyById(s.journeyId)) return;
+      (byDay[s.date] = byDay[s.date] || []).push(s);
+      if (!inMonth[s.journeyId] || s.date < inMonth[s.journeyId]) inMonth[s.journeyId] = s.date;
+    });
+    // Colors go to this month's journeys, in order of their first step this month, so they stay distinct.
+    var colors = {};
+    Object.keys(inMonth).sort(function (a, b) { return inMonth[a] < inMonth[b] ? -1 : inMonth[a] > inMonth[b] ? 1 : 0; })
+      .forEach(function (id, i) { colors[id] = JOURNEY_COLORS[i % JOURNEY_COLORS.length]; });
+    var firstDow = new Date(c.y, c.m, 1).getDay(), n = new Date(c.y, c.m + 1, 0).getDate();
+    var cells = '';
+    for (var b = 0; b < firstDow; b++) cells += '<span></span>';
+    for (var d = 1; d <= n; d++) {
+      var iso = monthKey + '-' + pad(d), evs = byDay[iso] || [];
+      var ids = [];
+      evs.forEach(function (s) { if (ids.indexOf(s.journeyId) < 0) ids.push(s.journeyId); });
+      var label = MONTHS_LONG[c.m] + ' ' + d + (evs.length ? ', ' + plural(evs.length, 'step') : '') + (iso === now ? ', today' : '');
+      cells += '<button type="button" class="cal-day' + (iso === c.sel ? ' sel' : '') + (iso === now ? ' today' : '') + '" data-action="cal-day" data-v="' + iso + '" aria-label="' + esc(label) + '"' + (iso === c.sel ? ' aria-pressed="true"' : '') + '>' +
+        '<span>' + d + '</span><span class="cal-dots">' + ids.slice(0, 3).map(function (id) { return '<i style="background:' + colors[id] + '"></i>'; }).join('') + '</span></button>';
+    }
+    var legend = Object.keys(colors).map(function (id) { var j = journeyById(id); return '<span><i style="background:' + colors[id] + '"></i>' + esc(j.name) + '</span>'; }).join('');
+    var isThisMonth = monthKey === now.slice(0, 7);
+
+    var h = '<main class="screen"><div class="top"><h1>Insights</h1>' + syncPill() + '</div>' + insightsTabs('calendar') +
+      '<section class="panel cal">' +
+      '<div class="cal-head"><button type="button" class="icon-btn soft" data-action="cal-nav" data-v="-1" aria-label="Previous month">' + icon('back', 18, 2.4) + '</button>' +
+      '<div class="cal-title">' + MONTHS_LONG[c.m] + ' ' + c.y + '</div>' +
+      '<button type="button" class="icon-btn soft" data-action="cal-nav" data-v="1" aria-label="Next month">' + icon('chevron', 18, 2.4) + '</button></div>' +
+      '<div class="cal-grid cal-dow" aria-hidden="true"><span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span></div>' +
+      '<div class="cal-grid">' + cells + '</div>' +
+      (legend ? '<div class="cal-legend">' + legend + '</div>' : '<p class="settings-help" style="text-align:center">No steps in ' + MONTHS_LONG[c.m] + '.</p>') +
+      (!isThisMonth ? '<button type="button" class="linkish" style="align-self:center" data-action="cal-today">Back to today</button>' : '') +
+      '</section>';
+
+    var selEvs = (byDay[c.sel] || []).slice();
+    var sd = new Date(+c.sel.slice(0, 4), +c.sel.slice(5, 7) - 1, +c.sel.slice(8, 10));
+    h += '<div class="section-label">' + WEEKDAYS[sd.getDay()] + ', ' + MONTHS_LONG[sd.getMonth()] + ' ' + sd.getDate() + (c.sel === now ? ' · Today' : '') + '</div>';
+    if (!selEvs.length) {
+      h += '<div class="row-card"><span class="s" style="font-size:14px">No steps on this day.</span></div>';
+    } else {
+      h += '<div class="result-list">' + selEvs.map(function (s) {
+        var j = journeyById(s.journeyId), st = stepsOf(j.id), i = st.indexOf(s), prev = i > 0 ? st[i - 1] : null;
+        var detail = 'Day ' + days(st[0].date, s.date) + (prev ? ' · ' + (days(prev.date, s.date) === 0 ? 'same day as ' + prev.step : plural(days(prev.date, s.date), 'day') + ' after ' + prev.step) : '');
+        return '<a class="result-row" href="#/j/' + esc(j.id) + '"><span class="dot-sm" style="background:' + colors[j.id] + '"></span><span class="rl-body">' +
+          '<span class="t">' + esc(s.step) + '</span><span class="s">' + esc(j.name) + ' · ' + esc(detail) + '</span></span></a>';
+      }).join('') + '</div>';
+    }
+    return h + '</main>';
+  }
+
+  // ---------- year in review ----------
+  function yearStats(y) {
+    var ys = String(y);
+    var all = allInfo().filter(function (ii) { return ii.steps.length; });
+    var finished = all.filter(function (ii) { return ii.done && ii.last.date.slice(0, 4) === ys; });
+    var steps = state.data.steps.filter(function (s) { return validIso(s.date) && s.date.slice(0, 4) === ys && journeyById(s.journeyId); });
+    var gaps = [];
+    all.forEach(function (ii) {
+      ii.steps.forEach(function (s, i) {
+        if (i && s.date.slice(0, 4) === ys) gaps.push({ ii: ii, g: days(ii.steps[i - 1].date, s.date), from: ii.steps[i - 1].step, to: s.step });
+      });
+    });
+    var months = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    steps.forEach(function (s) { months[+s.date.slice(5, 7) - 1]++; });
+    var byTotal = finished.slice().sort(function (a, b) { return a.total - b.total; });
+    var byType = {};
+    finished.forEach(function (ii) { var t = ii.j.type || 'Other'; (byType[t] = byType[t] || []).push(ii.total); });
+    var outcomes = {};
+    finished.forEach(function (ii) { if (ii.j.outcome) outcomes[ii.j.outcome] = (outcomes[ii.j.outcome] || 0) + 1; });
+    var longestGap = gaps.slice().sort(function (a, b) { return b.g - a.g; })[0] || null;
+    return {
+      y: y, finished: finished, steps: steps.length, months: months,
+      avg: gaps.length ? Math.round(gaps.reduce(function (a, x) { return a + x.g; }, 0) / gaps.length * 10) / 10 : null,
+      fastest: byTotal[0] || null, longest: byTotal.length > 1 ? byTotal[byTotal.length - 1] : null,
+      types: Object.keys(byType).map(function (t) { return { type: t, n: byType[t].length, avg: Math.round(byType[t].reduce(function (a, b) { return a + b; }, 0) / byType[t].length) }; })
+        .sort(function (a, b) { return b.n - a.n || b.avg - a.avg; }).slice(0, 4),
+      outcomes: outcomes, longestGap: longestGap && longestGap.g > 0 ? longestGap : null
+    };
+  }
+  function yearsWithData() {
+    var ys = {};
+    ys[+today().slice(0, 4)] = true;
+    state.data.steps.forEach(function (s) { if (validIso(s.date)) ys[+s.date.slice(0, 4)] = true; });
+    return Object.keys(ys).map(Number).sort();
+  }
+  function yearScreen() {
+    var cur = +today().slice(0, 4), years = yearsWithData();
+    if (!state.year) state.year = cur;
+    var y = state.year, st = yearStats(y);
+    var canPrev = years[0] < y, canNext = y < years[years.length - 1];
+    var h = '<main class="screen"><div class="top"><h1>Insights</h1>' + syncPill() + '</div>' + insightsTabs('year');
+    var curMonth = y === cur ? +today().slice(5, 7) - 1 : 11;
+    var maxM = Math.max.apply(null, st.months.concat([1]));
+    h += '<section class="year-hero">' +
+      '<div class="yh-head"><button type="button" class="yh-nav" data-action="year-nav" data-v="-1" aria-label="Previous year"' + (canPrev ? '' : ' disabled') + '>' + icon('back', 16, 2.6) + '</button>' +
+      '<h2>' + y + (y === cur ? ' so far' : '') + '</h2>' +
+      '<button type="button" class="yh-nav" data-action="year-nav" data-v="1" aria-label="Next year"' + (canNext ? '' : ' disabled') + '>' + icon('chevron', 16, 2.6) + '</button>' +
+      '<span style="flex:1"></span>' +
+      (st.steps ? '<button type="button" class="yh-share" data-action="share-year">' + icon('share', 16) + 'Share</button>' : '') + '</div>' +
+      '<div class="yh-stats"><div><b>' + st.finished.length + '</b><span>' + (st.finished.length === 1 ? 'journey finished' : 'journeys finished') + '</span></div>' +
+      '<div><b>' + st.steps + '</b><span>steps logged</span></div>' +
+      '<div><b>' + (st.avg == null ? '–' : st.avg) + '</b><span>days between steps</span></div></div>' +
+      '<div class="yh-months" role="img" aria-label="Steps per month: ' + esc(st.months.map(function (n, i) { return MONTHS[i] + ' ' + n; }).join(', ')) + '">' +
+      st.months.map(function (n, i) {
+        var future = i > curMonth;
+        return '<div class="yh-col"><span class="yh-bar' + (future ? ' future' : n ? '' : ' zero') + '" style="height:' + (n ? Math.max(8, Math.round(n / maxM * 100)) : 4) + '%"></span><span class="yh-m">' + MONTHS[i].charAt(0) + '</span></div>';
+      }).join('') + '</div></section>';
+
+    if (!st.steps) return h + '<div class="empty"><p>Nothing logged in ' + y + '.</p></div></main>';
+
+    if (st.fastest) {
+      h += '<div class="tiles">' +
+        '<a class="tile" href="#/j/' + esc(st.fastest.j.id) + '" style="color:inherit"><span>Fastest</span><b style="font-size:22px">' + plural(st.fastest.total, 'day') + '</b><span style="color:var(--ink-2)">' + esc(st.fastest.j.name) + '</span></a>' +
+        (st.longest ? '<a class="tile" href="#/j/' + esc(st.longest.j.id) + '" style="color:inherit"><span>Longest</span><b style="font-size:22px">' + plural(st.longest.total, 'day') + '</b><span style="color:var(--ink-2)">' + esc(st.longest.j.name) + '</span></a>' : '') +
+        '</div>';
+    }
+    if (st.types.length) {
+      var maxT = Math.max.apply(null, st.types.map(function (t) { return t.avg; }).concat([1]));
+      h += '<section class="panel"><h2>Average start to finish</h2>' + st.types.map(function (t) {
+        return '<div class="bar-row"><div class="lab"><b>' + esc(t.type) + ' · ' + t.n + ' finished</b><span>' + plural(t.avg, 'day') + '</span></div>' +
+          '<div class="track"><div class="fill" style="width:' + Math.max(4, Math.round(t.avg / maxT * 100)) + '%"></div></div></div>';
+      }).join('') + '</section>';
+    }
+    var oc = OUTCOMES.filter(function (o) { return st.outcomes[o.id]; });
+    if (oc.length) {
+      h += '<section class="panel"><h2>How they ended</h2><div class="outcome-legend">' + oc.map(function (o) {
+        return '<span><i class="ob ' + o.cls + '"></i><b>' + st.outcomes[o.id] + '</b> ' + esc(o.label) + '</span>';
+      }).join('') + '</div></section>';
+    }
+    if (st.longestGap) {
+      h += '<a class="hint warn" href="#/j/' + esc(st.longestGap.ii.j.id) + '" style="text-decoration:none">' + icon('clock', 18) +
+        '<span><b>Longest single wait: ' + plural(st.longestGap.g, 'day') + '</b><br>' + esc(st.longestGap.ii.j.name + ', ' + st.longestGap.from + ' → ' + st.longestGap.to) + '</span></a>';
+    }
+    return h + '</main>';
+  }
+
+  // ---------- finish sheet (outcome) ----------
+  function openFinishSheet(jid, opts) {
+    opts = opts || {};
+    var j = journeyById(jid);
+    state.sheet = {
+      kind: 'finish', jid: jid, outcomeOnly: !!opts.outcomeOnly,
+      outcome: opts.outcomeOnly ? (j.outcome || '') : '',
+      step: opts.step || '', stepTouched: !!opts.step, date: opts.date || today(), notes: opts.notes || ''
+    };
+    state.menu = false;
+    render();
+  }
+  function finishSheetHtml(sh, j) {
+    var ii = info(j);
+    return '<div class="scrim" data-action="scrim"><form class="sheet" id="finish-form" role="dialog" aria-modal="true" aria-labelledby="fin-title" novalidate>' +
+      '<div class="grab" aria-hidden="true"></div>' +
+      '<div class="top"><div><div class="eyebrow">' + esc(j.name) + (ii.first ? ' · Day ' + ii.daysIn : '') + '</div><h1 class="small" id="fin-title" style="font-size:24px">How did it end?</h1></div>' +
+      '<button type="button" class="icon-btn soft" data-action="close-sheet" aria-label="Close">' + icon('close', 18, 2.4) + '</button></div>' +
+      '<div class="outcome-grid" role="group" aria-label="Outcome">' + OUTCOMES.map(function (o) {
+        return '<button type="button" class="outcome-opt" data-action="pick-outcome" data-v="' + o.id + '" aria-pressed="' + (sh.outcome === o.id) + '">' +
+          '<span class="oi ' + o.cls + '">' + icon(o.icon, 18, 2.6) + '</span><span><span class="t">' + esc(o.label) + '</span><span class="s">' + esc(o.hint) + '</span></span></button>';
+      }).join('') + '</div>' +
+      (sh.outcomeOnly ? '' :
+        '<div class="field"><label for="fin-step">Last step</label><input class="input" id="fin-step" name="step" autocomplete="off" value="' + esc(sh.step) + '" placeholder="e.g. ' + esc(finalStepFor('got', j.type)) + '"></div>' +
+        dateField('fin-date', sh.date) +
+        '<div class="field"><label for="fin-notes">What happened? <span class="opt">(optional)</span></label><textarea class="input" id="fin-notes" name="notes" rows="2">' + esc(sh.notes) + '</textarea></div>') +
+      '<div class="hint" id="fin-hint">' + icon('chart', 18) + '<span>' + esc(outcomeHint(j, sh.outcome)) + '</span></div>' +
+      '<p class="error-text" id="fin-err" role="alert"></p>' +
+      '<div style="display:flex;gap:10px">' +
+      (sh.outcomeOnly && j.outcome ? '<button type="button" class="btn secondary" style="flex:none;padding:0 18px" data-action="clear-outcome">Clear</button>' : '') +
+      '<button class="btn" type="submit">' + (sh.outcomeOnly ? 'Save outcome' : 'Finish journey') + '</button></div>' +
+      '</form></div>';
+  }
+  function readFinishForm() {
+    var f = document.getElementById('finish-form');
+    if (!f || !state.sheet || state.sheet.kind !== 'finish') return;
+    if (f.step) state.sheet.step = f.step.value;
+    if (f.date) state.sheet.date = f.date.value;
+    if (f.notes) state.sheet.notes = f.notes.value;
+  }
+
+  // ---------- share as image ----------
+  function openShareSheet(what, id) {
+    state.sheet = { kind: 'share', what: what, jid: what === 'journey' ? id : null, year: what === 'year' ? id : null, showDates: true, dark: false, url: null, blob: null };
+    state.menu = false;
+    render();
+    buildShareImage();
+  }
+  function canShareFiles() {
+    try { return !!(navigator.share && navigator.canShare && navigator.canShare({ files: [new File([''], 'x.png', { type: 'image/png' })] })); } catch (e) { return false; }
+  }
+  function shareSheetHtml(sh) {
+    var title = sh.what === 'journey' ? journeyById(sh.jid).name : (sh.year + ' in review');
+    return '<div class="scrim" data-action="scrim"><div class="sheet" id="share-sheet" role="dialog" aria-modal="true" aria-labelledby="sh-title">' +
+      '<div class="grab" aria-hidden="true"></div>' +
+      '<div class="top"><div><div class="eyebrow">' + esc(title) + '</div><h1 class="small" id="sh-title" style="font-size:24px">Share as an image</h1></div>' +
+      '<button type="button" class="icon-btn soft" data-action="close-sheet" aria-label="Close">' + icon('close', 18, 2.4) + '</button></div>' +
+      '<div class="share-preview">' + (sh.url ? '<img id="share-img" src="' + sh.url + '" alt="Preview of the image to share">' : '<span class="settings-help">Preparing image…</span>') + '</div>' +
+      (sh.what === 'journey' ? '<label class="toggle-row" for="sh-dates"><span class="t">Show dates</span><input type="checkbox" id="sh-dates" data-share-opt="showDates"' + (sh.showDates ? ' checked' : '') + '></label>' : '') +
+      '<label class="toggle-row" for="sh-dark"><span class="t">Dark card</span><input type="checkbox" id="sh-dark" data-share-opt="dark"' + (sh.dark ? ' checked' : '') + '></label>' +
+      '<div style="display:flex;gap:10px"><button type="button" class="btn secondary" data-action="share-save">' + icon('download', 18) + 'Save image</button>' +
+      (canShareFiles() ? '<button type="button" class="btn" data-action="share-send">' + icon('share', 18) + 'Share…</button>' : '') + '</div>' +
+      '</div></div>';
+  }
+  function slug(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'journey'; }
+
+  function journeyCardSpec(jid, showDates) {
+    var j = journeyById(jid), ii = info(j), t = typeOf(j.type);
+    var segs = ii.gaps.map(function (g) { return { v: g }; });
+    if (!ii.done && ii.sinceLast > 0) segs.push({ v: ii.sinceLast, ongoing: true });
+    var o = outcomeOf(j.outcome);
+    return {
+      kicker: t.id, title: j.name,
+      subtitle: ii.done
+        ? [{ t: ii.first.step + ' → ' + ii.last.step + ' in ' }, { t: plural(ii.total, 'day'), strong: true }]
+        : [{ t: 'Day ' + ii.daysIn + ' · now: ' }, { t: ii.last ? ii.last.step : '—', strong: true }],
+      badge: ii.done && o ? { text: o.label, cls: o.cls } : null,
+      bars: segs.length ? segs : [{ v: 1 }],
+      range: showDates && ii.first ? [fmt(ii.first.date, true), ii.done ? fmt(ii.last.date, true) : 'Today'] : null,
+      items: ii.steps.map(function (s) { return { top: 'Day ' + days(ii.first.date, s.date), main: s.step, bottom: showDates ? fmt(s.date, true) : '' }; }),
+      footLeft: ii.longest ? 'Longest wait: ' + plural(ii.longest, 'day') : '',
+      file: slug(j.name) + '-timeline.png', shareTitle: j.name
+    };
+  }
+  function yearCardSpec(y) {
+    var st = yearStats(y), cur = +today().slice(0, 4);
+    var items = [];
+    if (st.fastest) items.push({ top: 'Fastest', main: st.fastest.j.name, bottom: plural(st.fastest.total, 'day') });
+    if (st.longest) items.push({ top: 'Longest', main: st.longest.j.name, bottom: plural(st.longest.total, 'day') });
+    return {
+      kicker: 'Year in review', title: y + (y === cur ? ' so far' : ''),
+      subtitle: [{ t: plural(st.finished.length, 'journey') + ' finished · ' }, { t: plural(st.steps, 'step'), strong: true }, { t: ' logged' }],
+      stats: [{ v: String(st.finished.length), l: 'finished' }, { v: String(st.steps), l: 'steps' }, { v: st.avg == null ? '–' : String(st.avg), l: 'days between steps' }],
+      months: st.months, items: items,
+      footLeft: st.longestGap ? 'Longest wait: ' + plural(st.longestGap.g, 'day') : '',
+      file: 'journeys-' + y + '.png', shareTitle: 'My ' + y + ' in journeys'
+    };
+  }
+
+  // Draws a share card on a canvas. Two passes: measure the height, then draw.
+  function drawCard(spec, dark) {
+    var W = 1080, P = 84, IW = W - 2 * P;
+    var C = dark
+      ? { bg: '#0E1320', fg: '#E9EDF5', muted: '#A3ADC2', accent: '#7B9CFF', panel: '#171E2E', ramp: ['#7B9CFF', '#5C7FE6', '#4566C8', '#344F9E'], ink: ['#0E1320', '#0E1320', '#FFFFFF', '#FFFFFF'], warn: '#F4A261' }
+      : { bg: '#EEF2FD', fg: '#16213A', muted: '#4A5570', accent: '#1F47C2', panel: '#FFFFFF', ramp: ['#2451D6', '#4A70E0', '#7E98EA', '#B3C4F3'], ink: ['#FFFFFF', '#FFFFFF', '#16213A', '#16213A'], warn: '#E8833A' };
+    var BADGE = { got: ['#E3F4EA', '#17663A'], rejected: ['#FDECEA', '#A3271B'], withdrew: ['#FFF1E6', '#8A3D08'], other: ['#EEF1F5', '#3A4560'] };
+    var F = '"Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    var canvas = document.createElement('canvas');
+    var ctx = canvas.getContext('2d');
+    function font(w, px) { ctx.font = w + ' ' + px + 'px ' + F; }
+    function fit(text, maxW) {
+      if (ctx.measureText(text).width <= maxW) return text;
+      while (text.length > 1 && ctx.measureText(text + '…').width > maxW) text = text.slice(0, -1);
+      return text + '…';
+    }
+    function wrap(text, maxW, maxLines) {
+      var words = String(text).split(/\s+/), lines = [], line = '';
+      words.forEach(function (w) {
+        var tryLine = line ? line + ' ' + w : w;
+        if (ctx.measureText(tryLine).width <= maxW || !line) line = tryLine; else { lines.push(line); line = w; }
+      });
+      if (line) lines.push(line);
+      if (lines.length > maxLines) { lines = lines.slice(0, maxLines); lines[maxLines - 1] = fit(lines[maxLines - 1] + '…', maxW); }
+      return lines;
+    }
+    function rr(x, y, w, h, r, fill) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); ctx.fillStyle = fill; ctx.fill(); }
+    function layout(draw) {
+      var y = P;
+      if (draw) { ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, canvas.height); }
+      font('800', 30); ctx.textBaseline = 'top';
+      if (draw) { ctx.fillStyle = C.accent; ctx.fillText(String(spec.kicker).toUpperCase(), P, y); }
+      y += 52;
+      var tSize = 76; font('800', tSize);
+      var tl = wrap(spec.title, IW, 2);
+      if (tl.length > 1) { tSize = 64; font('800', tSize); tl = wrap(spec.title, IW, 2); }
+      tl.forEach(function (l) { if (draw) { ctx.fillStyle = C.fg; ctx.fillText(l, P, y); } y += tSize * 1.12; });
+      y += 10;
+      var x = P;
+      spec.subtitle.forEach(function (part) {
+        font(part.strong ? '800' : '600', 36);
+        if (draw) { ctx.fillStyle = part.strong ? C.fg : C.muted; ctx.fillText(part.t, x, y); }
+        x += ctx.measureText(part.t).width;
+      });
+      if (spec.badge) {
+        font('800', 28);
+        var bw = ctx.measureText(spec.badge.text).width + 36, bx = x + 20;
+        if (bx + bw > P + IW) { y += 56; bx = P; }
+        if (draw) { var bc = BADGE[spec.badge.cls]; rr(bx, y - 4, bw, 50, 25, bc[0]); ctx.fillStyle = bc[1]; ctx.fillText(spec.badge.text, bx + 18, y + 7); }
+      }
+      y += 76;
+      if (spec.stats) {
+        var sw = IW / spec.stats.length;
+        spec.stats.forEach(function (s, i) {
+          if (draw) { font('800', 84); ctx.fillStyle = C.fg; ctx.fillText(s.v, P + i * sw, y); font('600', 28); ctx.fillStyle = C.muted; ctx.fillText(fit(s.l, sw - 20), P + i * sw, y + 96); }
+        });
+        y += 160;
+      }
+      if (spec.bars) {
+        var total = spec.bars.reduce(function (a, b) { return a + Math.max(1, b.v); }, 0), gap = 8, avail = IW - gap * (spec.bars.length - 1), bx2 = P;
+        spec.bars.forEach(function (b, i) {
+          var w = Math.max(14, avail * Math.max(1, b.v) / total);
+          if (draw) {
+            if (b.ongoing) {
+              rr(bx2, y, w, 64, 14, C.panel);
+              ctx.save(); ctx.beginPath(); ctx.rect(bx2, y, w, 64); ctx.clip();
+              ctx.fillStyle = C.warn;
+              for (var sx = bx2; sx < bx2 + w; sx += 28) ctx.fillRect(sx, y + 26, 16, 12);
+              ctx.restore();
+            } else {
+              var ci = Math.min(i, C.ramp.length - 1);
+              rr(bx2, y, w, 64, 14, C.ramp[ci]);
+              font('800', 28);
+              var lab = b.v + 'd';
+              if (ctx.measureText(lab).width + 20 <= w) { ctx.fillStyle = C.ink[ci]; ctx.fillText(lab, bx2 + (w - ctx.measureText(lab).width) / 2, y + 17); }
+            }
+          }
+          bx2 += w + gap;
+        });
+        y += 64 + 14;
+        if (spec.range) {
+          font('600', 26);
+          if (draw) { ctx.fillStyle = C.muted; ctx.fillText(spec.range[0], P, y); var rw = ctx.measureText(spec.range[1]).width; ctx.fillText(spec.range[1], P + IW - rw, y); }
+          y += 40;
+        }
+        y += 34;
+      }
+      if (spec.months) {
+        var mx = Math.max.apply(null, spec.months.concat([1])), cw = IW / 12, bh = 150;
+        spec.months.forEach(function (n, i) {
+          var h = n ? Math.max(12, bh * n / mx) : 6;
+          if (draw) { rr(P + i * cw + 8, y + bh - h, cw - 16, h, 8, n ? C.ramp[0] : C.panel); font('700', 24); ctx.fillStyle = C.muted; ctx.fillText(MONTHS[i].charAt(0), P + i * cw + cw / 2 - 8, y + bh + 12); }
+        });
+        y += bh + 64;
+      }
+      if (spec.items && spec.items.length) {
+        var shown = spec.items.slice(0, 10), colW = (IW - 40) / 2;
+        var rowH = 34 + 50 + (shown.some(function (it) { return it.bottom; }) ? 36 : 0) + 26;
+        shown.forEach(function (it, i) {
+          var cx = P + (i % 2) * (colW + 40), cy = y + Math.floor(i / 2) * rowH;
+          if (draw) {
+            font('800', 26); ctx.fillStyle = C.accent; ctx.fillText(it.top, cx, cy);
+            font('800', 40); ctx.fillStyle = C.fg; ctx.fillText(fit(it.main, colW), cx, cy + 34);
+            if (it.bottom) { font('600', 26); ctx.fillStyle = C.muted; ctx.fillText(it.bottom, cx, cy + 86); }
+          }
+        });
+        y += Math.ceil(shown.length / 2) * rowH;
+        if (spec.items.length > shown.length) {
+          font('700', 28);
+          if (draw) { ctx.fillStyle = C.muted; ctx.fillText('+ ' + plural(spec.items.length - shown.length, 'more step'), P, y); }
+          y += 48;
+        }
+        y += 10;
+      }
+      font('700', 28);
+      if (draw) {
+        ctx.fillStyle = C.muted;
+        if (spec.footLeft) ctx.fillText(spec.footLeft, P, y);
+        var brand = 'Journeys', bwid = ctx.measureText(brand).width;
+        ctx.fillText(brand, P + IW - bwid, y);
+        ctx.beginPath(); ctx.arc(P + IW - bwid - 22, y + 15, 9, 0, Math.PI * 2); ctx.fillStyle = C.accent; ctx.fill();
+      }
+      y += 40 + P;
+      return y;
+    }
+    canvas.width = W; canvas.height = 10;
+    var h = Math.ceil(layout(false));
+    canvas.width = W; canvas.height = h;
+    layout(true);
+    return canvas;
+  }
+
+  function buildShareImage() {
+    var sh = state.sheet;
+    if (!sh || sh.kind !== 'share') return;
+    var spec = sh.what === 'journey' ? journeyCardSpec(sh.jid, sh.showDates) : yearCardSpec(sh.year);
+    var ready = (document.fonts && document.fonts.load)
+      ? Promise.all([document.fonts.load('800 76px "Plus Jakarta Sans"'), document.fonts.load('600 36px "Plus Jakarta Sans"')]).catch(function () {})
+      : Promise.resolve();
+    ready.then(function () {
+      if (state.sheet !== sh) return;
+      var canvas = drawCard(spec, sh.dark);
+      canvas.toBlob(function (blob) {
+        if (state.sheet !== sh || !blob) return;
+        if (sh.url) URL.revokeObjectURL(sh.url);
+        sh.blob = blob; sh.url = URL.createObjectURL(blob); sh.file = spec.file; sh.shareTitle = spec.shareTitle;
+        var box = document.querySelector('.share-preview');
+        if (box) box.innerHTML = '<img id="share-img" src="' + sh.url + '" alt="Preview of the image to share">';
+      }, 'image/png');
+    });
+  }
+
   // ---------- step sheet ----------
   function openStepSheet(jid, stepId) {
     var s = stepId ? state.data.steps.find(function (x) { return x.id === stepId; }) : null;
@@ -704,7 +1333,10 @@
     render();
     setTimeout(function () { var el = document.getElementById('st-name'); if (el && !stepId) el.focus(); }, 60);
   }
-  function closeSheet() { state.sheet = null; render(); }
+  function closeSheet() {
+    if (state.sheet && state.sheet.url) URL.revokeObjectURL(state.sheet.url);
+    state.sheet = null; render();
+  }
 
   function suggestions(j, current) {
     var t = typeOf(j.type);
@@ -734,9 +1366,25 @@
     return (g === 0 ? 'Same day as ' + prev.step : plural(g, 'day') + ' after ' + prev.step) + ' · Day ' + days(first, date) + ' of this journey';
   }
 
+  function mountSheet(html, key) {
+    document.body.style.overflow = 'hidden';
+    var active = document.activeElement;
+    var keep = active && sheetRoot.contains(active) && active.id ? { id: active.id, s: active.selectionStart } : null;
+    if (sheetRoot.dataset.key === key && sheetRoot.firstChild) html = html.replace('<div class="scrim"', '<div class="scrim still"');
+    sheetRoot.dataset.key = key;
+    sheetRoot.innerHTML = html;
+    if (keep) { var el = document.getElementById(keep.id); if (el) { el.focus(); try { el.setSelectionRange(keep.s, keep.s); } catch (e) { /* ignore */ } } }
+  }
+
   function renderSheet() {
     var sh = state.sheet;
     if (!sh) { sheetRoot.innerHTML = ''; sheetRoot.dataset.key = ''; document.body.style.overflow = ''; return; }
+    if (sh.kind === 'finish') {
+      var fj = journeyById(sh.jid);
+      if (!fj) { state.sheet = null; sheetRoot.innerHTML = ''; return; }
+      return mountSheet(finishSheetHtml(sh, fj), 'finish|' + sh.jid);
+    }
+    if (sh.kind === 'share') return mountSheet(shareSheetHtml(sh), 'share|' + (sh.jid || sh.year));
     var j = state.data.journeys.find(function (x) { return x.id === sh.jid; });
     if (!j) { state.sheet = null; sheetRoot.innerHTML = ''; return; }
     document.body.style.overflow = 'hidden';
@@ -753,7 +1401,7 @@
       dateField('st-date', sh.date) +
       '<div class="hint" id="st-hint">' + icon('clock', 18) + '<span>' + esc(stepHint(sh.jid, sh.stepId, sh.date)) + '</span></div>' +
       '<div class="field"><label for="st-notes">Notes <span class="opt">(optional)</span></label><textarea class="input" id="st-notes" name="notes" rows="3" placeholder="Anything worth remembering">' + esc(sh.notes) + '</textarea></div>' +
-      (!editing && j.status !== 'Done' ? '<label class="toggle-row" for="st-final"><span><span class="t">This is the last step</span><span class="s">Marks the journey as done</span></span><input type="checkbox" id="st-final" name="final"' + (sh.final ? ' checked' : '') + '></label>' : '') +
+      (!editing && j.status !== 'Done' ? '<button type="button" class="linkish" style="align-self:flex-start;font-size:14px" data-action="to-finish">This finishes the journey…</button>' : '') +
       '<p class="error-text" id="st-err" role="alert"></p>' +
       '<div style="display:flex;gap:10px">' + (editing ? '<button type="button" class="btn danger" style="flex:none;padding:0 18px" data-action="delete-step">Delete</button>' : '') +
       '<button class="btn" type="submit">' + (editing ? 'Save changes' : 'Save step') + '</button></div>' +
@@ -801,6 +1449,65 @@
       else render();
     },
     'add-step': function () { openStepSheet(route().id); },
+    'finish': function () { openFinishSheet(route().id); },
+    'change-outcome': function () { openFinishSheet(route().id, { outcomeOnly: true }); },
+    'to-finish': function () {
+      readSheetForm();
+      var sh = state.sheet;
+      openFinishSheet(sh.jid, { step: sh.step.trim(), date: sh.date, notes: sh.notes });
+    },
+    'pick-outcome': function (el) {
+      readFinishForm();
+      var sh = state.sheet, j = journeyById(sh.jid);
+      sh.outcome = sh.outcome === el.dataset.v && sh.outcomeOnly ? '' : el.dataset.v;
+      if (!sh.stepTouched && !sh.outcomeOnly) sh.step = finalStepFor(sh.outcome, j.type);
+      renderSheet();
+    },
+    'clear-outcome': function () {
+      var sh = state.sheet;
+      updateJourney(sh.jid, { outcome: '' });
+      state.sheet = null; render(); toast('Outcome cleared');
+    },
+    'share-journey': function () { openShareSheet('journey', route().id); },
+    'share-year': function () { openShareSheet('year', state.year || +today().slice(0, 4)); },
+    'share-save': function () {
+      var sh = state.sheet;
+      if (!sh || !sh.url) { toast('Still preparing the image'); return; }
+      var a = document.createElement('a');
+      a.href = sh.url; a.download = sh.file || 'journey.png';
+      document.body.appendChild(a); a.click(); a.remove();
+      toast('Image saved');
+    },
+    'share-send': function () {
+      var sh = state.sheet;
+      if (!sh || !sh.blob) { toast('Still preparing the image'); return; }
+      var file = new File([sh.blob], sh.file || 'journey.png', { type: 'image/png' });
+      navigator.share({ files: [file], title: sh.shareTitle }).catch(function (e) { if (e && e.name !== 'AbortError') toast("Couldn't open sharing. Save the image instead."); });
+    },
+    'search-clear': function () {
+      state.search.q = '';
+      var inp = document.getElementById('search-q');
+      if (inp) { inp.value = ''; inp.focus(); }
+      var box = document.getElementById('search-results');
+      if (box) box.innerHTML = searchResultsHtml('');
+    },
+    'search-recent': function (el) {
+      state.search.q = el.dataset.v;
+      render();
+      var inp = document.getElementById('search-q');
+      if (inp) inp.focus();
+    },
+    'search-clear-recent': function () { store(LS.recent, []); render(); },
+    'search-open': function (el) { rememberSearch(state.search.q); go(el.dataset.href); },
+    'cal-day': function (el) { state.cal.sel = el.dataset.v; render(); },
+    'cal-nav': function (el) {
+      var c = state.cal, m = c.m + Number(el.dataset.v);
+      c.y += Math.floor(m / 12); c.m = ((m % 12) + 12) % 12;
+      c.sel = c.y + '-' + pad(c.m + 1) + '-01';
+      render();
+    },
+    'cal-today': function () { state.cal = null; render(); },
+    'year-nav': function (el) { state.year = (state.year || +today().slice(0, 4)) + Number(el.dataset.v); render(); },
     'edit-step': function (el) { openStepSheet(route().id, el.dataset.id); },
     'close-sheet': closeSheet,
     'scrim': function (el, ev) { if (ev.target === el) closeSheet(); },
@@ -859,7 +1566,7 @@
 
   document.addEventListener('click', function (ev) {
     var el = ev.target.closest('[data-action]');
-    if (state.menu && (!el || ['rename', 'toggle-done', 'delete-journey', 'menu'].indexOf(el.dataset.action) < 0)) {
+    if (state.menu && (!el || ['rename', 'toggle-done', 'delete-journey', 'menu', 'finish', 'change-outcome', 'share-journey'].indexOf(el.dataset.action) < 0)) {
       state.menu = false; render();
       if (!el) return;
     }
@@ -895,6 +1602,20 @@
       }
     }
     if (t.form && t.form.id === 'new-form') { readNewForm(); if (t.id === 'nj-date') syncDateChips('nj-date'); }
+    if (t.id === 'search-q') {
+      state.search.q = t.value;
+      var box = document.getElementById('search-results');
+      if (box) box.innerHTML = searchResultsHtml(t.value);
+    }
+    if (t.form && t.form.id === 'finish-form') {
+      readFinishForm();
+      if (t.id === 'fin-step') state.sheet.stepTouched = true;
+      if (t.id === 'fin-date') syncDateChips('fin-date');
+    }
+  });
+  document.addEventListener('change', function (ev) {
+    var k = ev.target.dataset && ev.target.dataset.shareOpt;
+    if (k && state.sheet && state.sheet.kind === 'share') { state.sheet[k] = ev.target.checked; buildShareImage(); }
   });
   function syncDateChips(id) {
     var v = document.getElementById(id).value;
@@ -915,6 +1636,29 @@
       var wasNew = !sh.stepId;
       state.sheet = null; render();
       toast(wasNew ? (sh.final ? 'Journey complete' : 'Step added') : 'Step updated');
+    }
+    if (f.id === 'search-form') {
+      rememberSearch(state.search.q);
+      var qi = document.getElementById('search-q');
+      if (qi) qi.blur();
+      return;
+    }
+    if (f.id === 'finish-form') {
+      readFinishForm();
+      var fs = state.sheet, fj = journeyById(fs.jid), ferr = document.getElementById('fin-err');
+      if (fs.outcomeOnly) {
+        if (!fs.outcome) { ferr.textContent = 'Pick how it ended.'; return; }
+        updateJourney(fs.jid, { outcome: fs.outcome });
+        state.sheet = null; render(); toast('Outcome saved');
+        return;
+      }
+      var stepName = (fs.step || '').trim() || finalStepFor(fs.outcome, fj.type);
+      if (!stepName) { ferr.textContent = 'Name the last step, or pick how it ended.'; f.step.focus(); return; }
+      if (!validIso(fs.date)) { ferr.textContent = 'Pick a date.'; f.date.focus(); return; }
+      addStep(fs.jid, stepName, fs.date, (fs.notes || '').trim(), true, fs.outcome);
+      state.sheet = null; render();
+      toast(fs.outcome ? 'Journey finished · ' + outcomeOf(fs.outcome).label : 'Journey finished');
+      return;
     }
     if (f.id === 'new-form') {
       readNewForm();
@@ -975,6 +1719,7 @@
     state.menu = false; state.sheet = null;
     if (route().name === 'server') state.serverSettings = null;
     render(); window.scrollTo(0, 0);
+    if (route().name === 'search') { var qi = document.getElementById('search-q'); if (qi) qi.focus(); }
   });
   window.addEventListener('online', function () { sync(); });
   window.addEventListener('offline', function () { if (!isDemo()) setSync('offline'); });

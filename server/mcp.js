@@ -50,6 +50,7 @@ module.exports = function createMcp(x) {
     const s = !done && st.length ? journeyStatus(d, j, h, t) : null;
     return {
       id: j.id, name: j.name, type: j.type || 'Other', status: done ? 'done' : 'active',
+      outcome: done && j.outcome ? j.outcome : null,
       steps: st.length,
       started: first ? first.date : null,
       current_step: last ? last.step : null,
@@ -62,8 +63,9 @@ module.exports = function createMcp(x) {
     };
   }
   function line(f) {
+    const OUT = { got: 'got it', rejected: 'rejected', withdrew: 'withdrew', other: 'other outcome' };
     const when = f.status === 'done'
-      ? `done, ${plural(f.days_so_far, 'day')} start to finish`
+      ? `done${f.outcome ? ' (' + OUT[f.outcome] + ')' : ''}, ${plural(f.days_so_far, 'day')} start to finish`
       : `Day ${f.days_so_far}, now: ${f.current_step || 'no steps'}${f.days_since_last_step != null ? ` (${f.days_since_last_step === 0 ? 'today' : plural(f.days_since_last_step, 'day') + ' ago'})` : ''}${f.waiting_longer_than_usual ? ' — waiting longer than usual' : ''}`;
     return `- ${f.name} [${f.type}] ${when}; ${plural(f.steps, 'step')}; id ${f.id}`;
   }
@@ -78,7 +80,7 @@ module.exports = function createMcp(x) {
       days_since_previous: i ? days(st[i - 1].date, s.date) : null,
       notes: s.notes || ''
     }));
-    const text = [`${j.name} [${f.type}], ${f.status}. Started ${f.started || '—'}.`]
+    const text = [`${j.name} [${f.type}], ${f.status}${f.outcome ? ' (outcome: ' + f.outcome + ')' : ''}. Started ${f.started || '—'}.`]
       .concat(steps.map((s) => `${s.date} · Day ${s.day} · ${s.step}${s.days_since_previous != null ? ` (+${s.days_since_previous}d)` : ''}${s.notes ? ' — ' + s.notes : ''}  [step id ${s.id}]`))
       .concat(f.status === 'active' && f.current_step
         ? [`Waiting ${plural(f.days_since_last_step, 'day')} on ${f.current_step}` +
@@ -162,7 +164,8 @@ module.exports = function createMcp(x) {
         step: str('What happened, e.g. "Interview".'),
         date: DATE,
         notes: str('Optional notes.'),
-        final: { type: 'boolean', description: 'True if this is the last step; marks the journey done.', default: false }
+        final: { type: 'boolean', description: 'True if this is the last step; marks the journey done.', default: false },
+        outcome: str('How it ended, when finishing: got (got it / approved), rejected, withdrew, or other.', { enum: ['got', 'rejected', 'withdrew', 'other'] })
       }, required: ['journey', 'step'], additionalProperties: false },
       annotations: Object.assign({ title: 'Add a step' }, WRITE),
       async run(a) {
@@ -171,7 +174,7 @@ module.exports = function createMcp(x) {
           await ensureSetup();
           const dd = await readAll();
           const jj = findJourney(dd, a.journey);
-          apply({ action: 'addStep', journeyId: jj.id, step: a.step, date, notes: a.notes || '', final: !!a.final }, dd);
+          apply({ action: 'addStep', journeyId: jj.id, step: a.step, date, notes: a.notes || '', final: !!a.final, outcome: a.final ? a.outcome : undefined }, dd);
           await writeAll(dd);
           return { d: dd, id: jj.id };
         });
@@ -222,12 +225,13 @@ module.exports = function createMcp(x) {
     },
     {
       name: 'update_journey', title: 'Edit a journey',
-      description: 'Rename a journey, change its type, or mark it done / reopen it.',
+      description: 'Rename a journey, change its type, mark it done / reopen it, or record how it ended (outcome).',
       inputSchema: { type: 'object', properties: {
         journey: JOURNEY,
         name: str('New name.'),
         type: str('New type.', { enum: ['Job', 'Home', 'Documents', 'Travel', 'Health', 'Purchase', 'Other'] }),
-        status: str('done to finish it, active to reopen it.', { enum: ['active', 'done'] })
+        status: str('done to finish it, active to reopen it (reopening clears the outcome).', { enum: ['active', 'done'] }),
+        outcome: str('How it ended, when finishing: got (got it / approved), rejected, withdrew, or other.', { enum: ['got', 'rejected', 'withdrew', 'other'] })
       }, required: ['journey'], additionalProperties: false },
       annotations: Object.assign({ title: 'Edit a journey', idempotentHint: true }, WRITE),
       async run(a) {
@@ -239,6 +243,7 @@ module.exports = function createMcp(x) {
           if (a.name != null) body.name = a.name;
           if (a.type != null) body.type = a.type;
           if (a.status != null) body.status = a.status === 'done' ? 'Done' : 'Active';
+          if (a.outcome != null) body.outcome = a.outcome;
           apply(body, dd);
           await writeAll(dd);
           return { d: dd, id: j.id };

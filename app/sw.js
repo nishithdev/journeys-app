@@ -1,5 +1,5 @@
 /* Service worker: keeps the app working offline. Data sync goes straight to the network. */
-var VERSION = 'journeys-v4';
+var VERSION = 'journeys-v5';
 var SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', function (e) {
