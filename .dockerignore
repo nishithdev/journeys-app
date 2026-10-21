@@ -1,0 +1,8 @@
+.git
+.env
+.env.example
+secrets
+*service-account*.json
+README.md
+docker-compose.yml
+*.zip

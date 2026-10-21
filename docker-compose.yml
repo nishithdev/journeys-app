@@ -1,0 +1,14 @@
+services:
+  journeys:
+    build: .
+    image: journeys-app:latest
+    container_name: journeys
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # change the left number if 8080 is taken on your server
+    env_file: .env      # SPREADSHEET_ID, TZ and optional APP_TOKEN (copy .env.example to .env)
+    volumes:
+      - ./secrets/service-account.json:/run/secrets/service-account.json:ro
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
