@@ -570,6 +570,13 @@
         '<div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn secondary small" type="button" data-action="ha-test">Send test notification</button>' +
         '<button class="btn secondary small" type="button" data-action="ha-check">Check now</button></div></section>';
     }
+    if (!isDemo() && srv.mcp) {
+      var mcpUrl = location.origin + location.pathname.replace(/[^/]*$/, '') + 'mcp';
+      h += '<section class="panel"><h2>AI assistants (MCP)</h2><p class="settings-help">Claude and other MCP apps can read and update your journeys. Connect them to:</p>' +
+        '<div style="display:flex;gap:8px;align-items:center"><code class="mcp-url" id="mcp-url">' + esc(mcpUrl) + '</code>' +
+        '<button class="btn secondary small" type="button" data-action="copy-mcp" data-v="' + esc(mcpUrl) + '">Copy</button></div>' +
+        '<p class="settings-help">' + (srv.authRequired ? 'Send your access token as <code>Authorization: Bearer …</code>.' : 'Set <code>APP_TOKEN</code> on the server first: these tools can also delete.') + ' Setup for each app is in the README.</p></section>';
+    }
     if (!isDemo()) {
       h += '<a class="row-card" href="#/server"><div style="min-width:0"><div class="t">Server settings</div>' +
         '<div class="s">Sheet, time zone, Home Assistant, nudge timing</div></div>' + icon('chevron', 20) + '</a>';
@@ -586,7 +593,7 @@
         '<div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn secondary small" data-action="reset-demo">Reset sample data</button>' +
         '<button class="btn danger small" data-action="clear-demo">Clear all</button></div></section>';
     }
-    h += '<p class="settings-help" style="text-align:center">Journeys v2.2</p></main>';
+    h += '<p class="settings-help" style="text-align:center">Journeys v2.3</p></main>';
     return h;
   }
 
@@ -814,6 +821,13 @@
       var st = stepsOf(sh.jid);
       if (st.length === 1 && !window.confirm('This is the only step. Delete it anyway?')) return;
       deleteStep(sh.stepId); state.sheet = null; render(); toast('Step deleted');
+    },
+    'copy-mcp': function (el) {
+      var v = el.dataset.v;
+      (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject()).then(function () { toast('Copied'); }, function () {
+        var r = document.createRange(); r.selectNodeContents(document.getElementById('mcp-url'));
+        var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); toast('Selected. Copy it from here');
+      });
     },
     'reload-server-settings': function () { state.serverSettings = null; render(); },
     'reset-setting': function (el) {

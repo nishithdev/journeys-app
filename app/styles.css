@@ -210,3 +210,4 @@ select.input:focus { padding-right: 39px; }
 a.row-card { text-decoration: none; }
 a.row-card svg { color: var(--muted); }
 .settings-help code { background: var(--bg); padding: 1px 6px; border-radius: 6px; font-size: 12px; }
+.mcp-url { flex: 1; min-width: 0; overflow-wrap: anywhere; background: var(--bg); padding: 10px 12px; border-radius: 10px; font-size: 13px; }

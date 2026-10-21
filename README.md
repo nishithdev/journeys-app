@@ -8,6 +8,7 @@ It runs as one Docker container on your home server. The container serves the ap
 journeys-app/
 ├── app/                  ← the phone app (HTML, JS, CSS, icons)
 ├── server/server.js      ← serves the app + talks to Google Sheets (no npm packages)
+├── server/mcp.js         ← MCP endpoint for AI assistants (/mcp)
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example          ← copy to .env: Sheet ID, time zone, optional token, Home Assistant
@@ -58,7 +59,7 @@ docker compose logs -f journeys
 The log should show:
 
 ```
-Journeys 2.2.0 listening on :8080
+Journeys 2.3.0 listening on :8080
 Using service account journeys@…iam.gserviceaccount.com — share your Sheet with it as Editor.
 ```
 
@@ -149,6 +150,57 @@ The sensors work in any automation, for example:
 - Add `{{ state_attr('sensor.journeys_longest_wait', 'journey') }}` to a morning announcement on a speaker.
 
 ---
+
+## 7. AI assistants (MCP)
+
+The server includes an [MCP](https://modelcontextprotocol.io) endpoint, so Claude and other MCP apps can work with your journeys. You can ask things like *"how long did my last job hunt take?"*, *"log an interview for Acme today"* or *"what's been waiting longest?"*.
+
+**Address:** `https://<your-journeys-address>/mcp` (Streamable HTTP). The app shows it under **Settings → AI assistants**.
+
+| Tool | What it does |
+|---|---|
+| `list_journeys` | Journeys with current step, day count, days since last step (filter by active/done, type, name) |
+| `get_journey` | One journey's steps with dates, day numbers, gaps and notes, plus what usually comes next |
+| `add_journey` | Start a journey with its first step |
+| `add_step` | Log a step (date defaults to today; `final` completes the journey) |
+| `update_step` / `update_journey` | Edit a step, or rename / finish / reopen a journey |
+| `delete_step` / `delete_journey` | Remove things (marked destructive, so apps ask before running them) |
+| `get_insights` | What's waiting longer than usual, longest gaps, typical day each step is reached |
+
+Journeys can be referred to by name; a unique part of the name is enough.
+
+> **Set `APP_TOKEN` first.** These tools can change and delete data, and an AI app may run them on your behalf. With a token set, apps must send `Authorization: Bearer <APP_TOKEN>`.
+
+**The computer running the AI app must be on your VPN**, since that's the only way it can reach the server.
+
+**Claude Code**
+```bash
+claude mcp add --transport http journeys https://<your-journeys-address>/mcp \
+  --header "Authorization: Bearer <APP_TOKEN>"
+```
+
+**Claude Desktop**
+
+Go to **Settings → Developer → Edit config** and add the following, then restart Claude Desktop. It uses the `mcp-remote` bridge, which needs Node.js installed.
+```json
+{
+  "mcpServers": {
+    "journeys": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://<your-journeys-address>/mcp",
+               "--header", "Authorization: Bearer ${JOURNEYS_TOKEN}"],
+      "env": { "JOURNEYS_TOKEN": "<APP_TOKEN>" }
+    }
+  }
+}
+```
+Leave out the two `--header` entries and `env` if you haven't set `APP_TOKEN`.
+
+> Claude's **custom connectors** (Settings → Connectors → Add custom connector, on claude.ai or in the desktop app) connect from Anthropic's servers, not your computer. They can't reach a server that's only on your VPN, so use the config above instead.
+
+**Other MCP apps** (Cursor, VS Code, and others): add a remote / Streamable HTTP server with the address above and the `Authorization` header.
+
+If a web page needs to call `/mcp` from another origin, list it in `MCP_ALLOWED_ORIGINS` (comma-separated). Requests from other websites' pages are refused by default. Apps that don't run in a browser aren't affected.
 
 ## Changing settings later
 

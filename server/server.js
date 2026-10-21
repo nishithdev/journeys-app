@@ -17,7 +17,10 @@
  *   NUDGE_AFTER_DAYS                days on one step before a nudge, when there's no history (default 7)
  *   NUDGE_REPEAT_DAYS               days before nudging about the same step again (default 3)
  *
- * Other: PORT (default 8080), DATA_DIR (default /data)
+ * Other: PORT (default 8080), DATA_DIR (default /data),
+ *        MCP_ALLOWED_ORIGINS (browser origins allowed to call /mcp; same-origin is always allowed)
+ *
+ * MCP: AI assistants can connect to <server>/mcp (Streamable HTTP). See server/mcp.js.
  */
 'use strict';
 const http = require('http');
@@ -39,7 +42,8 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || '/data');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const SHEETS_BASE = (process.env.SHEETS_API_BASE || 'https://sheets.googleapis.com/v4/spreadsheets').replace(/\/$/, '');
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
-const VERSION = '2.2.0';
+const VERSION = '2.3.0';
+const MCP_ALLOWED_ORIGINS = (process.env.MCP_ALLOWED_ORIGINS || '').split(',').map((x) => x.trim()).filter(Boolean);
 const NUDGE_CHECK_MS = intEnv('NUDGE_CHECK_MS', 10 * 60 * 1000, 200, 24 * 3600 * 1000);
 
 const JOURNEY_HEADERS = ['Journey ID', 'Journey', 'Type', 'Status', 'Created', 'Snoozed until', 'Last nudged'];
@@ -651,6 +655,12 @@ async function saveSettings(body) {
   });
 }
 
+// ---------- MCP (AI assistants) ----------
+const mcp = require('./mcp')({
+  VERSION, ensureSetup, readAll, writeAll, apply, exclusive, stepsOf, history, journeyStatus,
+  days, today, validIso, addDays, userError, AppError, sheetUrl
+});
+
 // ---------- HTTP ----------
 const SECURITY_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
 const TYPES = {
@@ -713,10 +723,12 @@ const server = http.createServer(async (req, res) => {
   const { pathname } = new URL(req.url, 'http://local');
   try {
     if (pathname === '/healthz') return send(res, 200, { 'Content-Type': 'text/plain' }, 'ok\n');
+    if (pathname === '/mcp') return await mcp.handleHttp(req, res, { authorized, readBody, allowedOrigins: MCP_ALLOWED_ORIGINS });
     if (pathname === '/api/health') {
       return sendJson(res, 200, {
         ok: true, app: 'journeys', version: VERSION, authRequired: !!APP_TOKEN, configured: !!conf.spreadsheetId,
-        ha: { enabled: haEnabled(), nudgeHour: conf.nudgeHour }
+        ha: { enabled: haEnabled(), nudgeHour: conf.nudgeHour },
+        mcp: { path: '/mcp', tools: mcp.tools.length }
       });
     }
     if (pathname === '/api' || pathname.startsWith('/api/')) {
@@ -751,6 +763,7 @@ server.listen(PORT, () => {
   if (Object.keys(overrides).length) console.log(`Using settings saved from the app: ${Object.keys(overrides).join(', ')} (${SETTINGS_FILE})`);
   try { console.log(`Using service account ${serviceAccount().email} — share your Sheet with it as Editor.`); } catch (e) { console.warn(e.message); }
   if (!haEnabled() && (conf.haUrl || HA_TOKEN || conf.haNotify)) console.warn('Home Assistant nudges are off: they need HA_TOKEN in .env plus the HA URL and notify service.');
+  console.log(`MCP endpoint for AI assistants: /mcp (${mcp.tools.length} tools)`);
   startNudgeSchedule();
 });
 for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => server.close(() => process.exit(0)));

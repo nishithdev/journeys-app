@@ -13,7 +13,7 @@ RUN apk add --no-cache tzdata \
  && mkdir -p /data && chown node:node /data
 
 WORKDIR /app
-COPY server/server.js ./server.js
+COPY server/*.js ./
 COPY app/ ./public/
 
 USER node
