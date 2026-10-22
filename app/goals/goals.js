@@ -93,27 +93,51 @@
         });
       });
     }
-    var syncing = null;
+    // Changes are queued on the phone, then sent together: one request (and one Sheet read and write)
+    // for a burst of taps, so we stay under Google's 60-reads-a-minute limit.
+    var BATCH_WAIT = 1200, BATCH_MAX = 100;
+    var syncing = null, soonTimer = null, retryTimer = null, retryDelay = 0;
+    function syncSoon() { clearTimeout(soonTimer); soonTimer = setTimeout(sync, BATCH_WAIT); }
+    function retryLater() {
+      retryDelay = Math.min(retryDelay ? retryDelay * 2 : 30000, 5 * 60000);
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(sync, retryDelay);
+      return Math.round(retryDelay / 1000);
+    }
     function sync() {
+      clearTimeout(soonTimer);
       if (h.isDemo()) return Promise.resolve();
       if (syncing) { syncing.again = true; return syncing.p; }
       if (!navigator.onLine) { gs.status = 'offline'; return Promise.resolve(); }
+      clearTimeout(retryTimer);
       var run = { again: false };
       gs.status = 'syncing';
-      run.p = (function flush() {
-        if (!gs.outbox.length) return Promise.resolve();
-        return api(gs.outbox[0]).then(function () {
-          gs.outbox.shift(); h.store(KEY.outbox, gs.outbox); return flush();
+      run.p = (function flush(last) {
+        if (!gs.outbox.length) return Promise.resolve(last);
+        var ops = gs.outbox.slice(0, BATCH_MAX);
+        return api({ action: 'batch', ops: ops }).then(function (p) {
+          gs.outbox = gs.outbox.slice(ops.length); h.store(KEY.outbox, gs.outbox);
+          var bad = (p.result || []).filter(function (r) { return !r.ok; });
+          if (bad.length) h.toast('A change could not be saved: ' + bad[0].error + (bad.length > 1 ? ' (and ' + (bad.length - 1) + ' more)' : ''));
+          return flush(p);
         }, function (err) {
-          if (err.kind === 'user') { gs.outbox.shift(); h.store(KEY.outbox, gs.outbox); h.toast('A change could not be saved: ' + err.message); return flush(); }
+          if (err.kind === 'user') { // the server can't use this batch at all; drop it so it doesn't block the rest
+            gs.outbox = gs.outbox.slice(ops.length); h.store(KEY.outbox, gs.outbox);
+            h.toast('Changes could not be saved: ' + err.message);
+            return flush(last);
+          }
           throw err;
         });
-      })().then(function () { return api({ action: 'read' }); }).then(function (p) {
+      })(null).then(function (p) {
+        return p || api({ action: 'read' }); // a batch already answers with fresh data
+      }).then(function (p) {
         if (!gs.outbox.length) { gs.data = p.data; save(); }
-        gs.status = 'synced'; gs.error = '';
+        gs.status = 'synced'; gs.error = ''; retryDelay = 0;
       }).catch(function (err) {
+        var wait = err.kind === 'config' || err.kind === 'auth' ? 0 : retryLater();
         gs.status = err.server ? 'error' : 'offline';
-        gs.error = err.server ? err.message : "Can't reach your Journeys server.";
+        gs.error = (err.server ? err.message.replace(/ It will retry\.?$/, '') : "Can't reach your Journeys server.") +
+          (wait ? ' Trying again in ' + (wait >= 60 ? Math.round(wait / 60) + ' min' : wait + ' s') + '. Your changes are kept on this phone.' : '');
       }).then(function () {
         syncing = null;
         if (onScreen()) refresh();
@@ -134,7 +158,7 @@
       save();
       if (!h.isDemo()) { gs.outbox.push(op); h.store(KEY.outbox, gs.outbox); }
       h.render();
-      sync();
+      syncSoon();
     }
     // The same changes the server makes (server/goals.js), so the screen updates before the Sheet does.
     function applyOp(d, b) {
@@ -215,7 +239,7 @@
     function banner() {
       if (h.isDemo()) return '<div class="banner"><span>Sample goals and habits, kept on this device.</span></div>';
       if (gs.status === 'error') return '<div class="banner error" role="alert"><span>' + esc(gs.error) + '</span></div>';
-      if (gs.outbox.length && gs.status === 'offline') return '<div class="banner"><span>Offline. ' + h.plural(gs.outbox.length, 'change') + ' will sync when you\'re back.</span></div>';
+      if (gs.outbox.length && gs.status === 'offline') return '<div class="banner"><span>' + esc(gs.error || 'Offline.') + ' ' + h.plural(gs.outbox.length, 'change') + ' waiting.</span></div>';
       return '';
     }
 
@@ -226,7 +250,8 @@
       var dateLabel = d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
       var list = gs.data.habits.filter(function (x) { return x.status !== 'archived'; }).map(function (x) { return { hb: x, s: stats(x) }; });
       var archived = gs.data.habits.filter(function (x) { return x.status === 'archived'; });
-      var rank = function (e) { return e.s.dueToday && !e.s.today ? 0 : e.s.today ? 1 : 2; };
+      // Today's habits first, the rest after. Checking one off doesn't move it, so quick taps land where you aim.
+      var rank = function (e) { return e.s.dueToday || e.s.today ? 0 : 1; };
       list.sort(function (a, b) { return rank(a) - rank(b); });
       var due = list.filter(function (e) { return e.s.dueToday && !e.s.skippedToday; });
       var doneN = due.filter(function (e) { return e.s.doneToday; }).length;
@@ -820,7 +845,10 @@
     }, true);
     window.addEventListener('hashchange', function () { gs.menu = false; });
     window.addEventListener('online', function () { sync(); });
-    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') sync(); });
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') sync();
+      else if (gs.outbox.length && soonTimer) sync(); // leaving the app: send queued taps now
+    });
 
     J.register({
       id: 'goals',

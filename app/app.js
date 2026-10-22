@@ -205,12 +205,14 @@
         if (!h || !h.ok || h.app !== 'journeys') return; // unreachable, or just static files: keep the current mode
         state.server = h;
         store(LS.addons, h.addons || []);
-        loadAddons();
         if (mode !== 'server') {
           mode = 'server'; store(LS.mode, mode);
+          // An add-on loaded with sample data would keep using it: start again on the server's data.
+          if (Object.keys(addons).length) { location.reload(); return; }
           state.data = load(LS.data, null) || { journeys: [], steps: [] };
           render();
         }
+        loadAddons(); // after the mode is settled, so it uses the server's list
       });
   }
 
@@ -221,22 +223,23 @@
     if (!navigator.onLine) { setSync('offline'); return Promise.resolve(); }
     var run = { again: false };
     setSync('syncing');
-    run.p = (function flush() {
-      if (!state.outbox.length) return Promise.resolve();
+    run.p = (function flush(last) {
+      if (!state.outbox.length) return Promise.resolve(last);
       var op = state.outbox[0];
-      return api(op).then(function () {
-        state.outbox.shift(); store(LS.outbox, state.outbox); return flush();
+      return api(op).then(function (p) {
+        state.outbox.shift(); store(LS.outbox, state.outbox); return flush(p);
       }, function (err) {
         if (err.kind === 'user') {
           // The server rejected this change itself; drop it so it doesn't block everything else.
           state.outbox.shift(); store(LS.outbox, state.outbox);
           toast('A change could not be saved: ' + err.message);
-          return flush();
+          return flush(last);
         }
         throw err;
       });
-    })().then(function () {
-      return api({ action: 'read' });
+    })(null).then(function (p) {
+      // Each change already answers with the whole Sheet, so only read when nothing was sent.
+      return p && p.data ? p : api({ action: 'read' });
     }).then(function (p) {
       if (!state.outbox.length) { state.data = p.data; saveData(); }
       if (p.data.sheetUrl) { cfg.sheetUrl = p.data.sheetUrl; store(LS.config, cfg); }

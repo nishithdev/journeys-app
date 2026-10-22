@@ -94,7 +94,19 @@ function init(x) {
     if (missing.length) console.log(`[goals] Sheet tabs created: ${missing.join(', ')}`);
   }
 
+  // What we last read or wrote, reused for a few seconds so a burst of check-ins doesn't hit Google's
+  // read quota (60 reads a minute). Edits made directly in the Sheet show up after at most CACHE_MS.
+  const CACHE_MS = 15000;
+  let mem = null;
+  const copy = (d) => JSON.parse(JSON.stringify(d));
+  function remember(d) { mem = { sheet: conf.spreadsheetId, at: Date.now(), d: copy(d) }; }
   async function read() {
+    if (mem && mem.sheet === conf.spreadsheetId && Date.now() - mem.at < CACHE_MS) return copy(mem.d);
+    const d = await readSheet();
+    remember(d);
+    return d;
+  }
+  async function readSheet() {
     const q = KEYS.map((k) => `ranges=${encodeURIComponent(`${quoted(TABS[k].title)}!A2:${colLetter(TABS[k].headers.length - 1)}`)}`).join('&') +
       '&valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=SERIAL_NUMBER&majorDimension=ROWS';
     const r = await sheets('GET', `/values:batchGet?${q}`);
@@ -159,7 +171,10 @@ function init(x) {
       if (rows[k].length) data.push({ range: `${quoted(TABS[k].title)}!A2`, values: rows[k] });
       d.rows[k] = n;
     }
-    if (data.length) await sheets('POST', '/values:batchUpdate', { valueInputOption: 'RAW', data });
+    try {
+      if (data.length) await sheets('POST', '/values:batchUpdate', { valueInputOption: 'RAW', data });
+    } catch (e) { mem = null; throw e; } // not saved: read the Sheet again next time
+    remember(d);
   }
 
   // ---------- changes ----------
@@ -304,9 +319,30 @@ function init(x) {
       return { result, d };
     });
   }
+  // Several queued changes from the app in one go: one read and one write for all of them.
+  // A change that's invalid on its own is skipped and reported; the rest are still saved.
+  async function batch(ops) {
+    if (!Array.isArray(ops) || !ops.length) throw userError('Nothing to save.');
+    if (ops.length > 200) throw userError('Too many changes at once (200 max).');
+    if (!enabled()) throw offError();
+    await ensureTabs();
+    return exclusive(async () => {
+      const d = await read();
+      const results = ops.map((op) => {
+        if (!op || typeof op.action !== 'string' || op.action === 'batch' || op.action === 'read') return { ok: false, error: 'Not a change.' };
+        try { return { ok: true, id: apply(op, d).id }; } catch (e) {
+          if (e instanceof AppError && e.kind === 'user') return { ok: false, error: e.message };
+          throw e;
+        }
+      });
+      if (results.some((r) => r.ok)) await write(d);
+      return { results, data: view(d) };
+    });
+  }
   async function handleApi(body) {
     if (!body || typeof body.action !== 'string') throw userError('Missing action.');
     if (body.action === 'read') return { result: null, data: view(await current()) };
+    if (body.action === 'batch') { const r = await batch(body.ops); return { result: r.results, data: r.data }; }
     const { result, d } = await change(body);
     return { result, data: view(d) };
   }
