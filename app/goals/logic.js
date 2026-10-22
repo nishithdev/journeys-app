@@ -199,7 +199,9 @@
     return {
       id: g.id, name: g.name, measure: g.measure || 'number', total: total, target: target, unit: g.unit || '',
       startValue: isValue ? from : null, change: Math.round((total - from) * 100) / 100, down: down,
-      pct: Math.round(frac * 100),
+      // Going up from zero or more (savings $3,400 → $10,000): show how much of the target you have (34%).
+      // Going down (weight 200 → 180): show how far you've come from the start.
+      pct: isValue && !down && from >= 0 && target > 0 ? Math.round(Math.min(1, Math.max(0, total / target)) * 100) : Math.round(frac * 100),
       status: status, plan: planFrac == null ? null : roundStep(from + span * planFrac, span),
       projected: projected, daysLeft: validIso(g.due) ? days(today, g.due) : null,
       lastProgress: last, quietDays: quiet, perDay: rate, early: early,
@@ -245,6 +247,7 @@
   // Same, for any goal: "185 lbs now · down 15 of 20 lbs" for reach-a-number goals.
   function goalProgressText(s) {
     if (s.measure !== 'value') return progressText(s.total, s.target, s.unit);
+    if (!s.down && s.startValue >= 0) return progressText(s.total, s.target, s.unit) + (s.change > 0 ? ' · up ' + formatAmount(s.change, s.unit) + ' since the start' : '');
     var moved = s.down ? -s.change : s.change;
     return formatAmount(s.total, s.unit) + ' now · ' + (s.down ? 'down ' : 'up ') + formatAmount(Math.max(0, Math.round(moved * 100) / 100), '') + ' of ' + formatAmount(Math.abs(s.target - s.startValue), s.unit);
   }

@@ -293,7 +293,10 @@
       behind: { cls: 'warn', text: function (s, g) { return 'Behind plan · ' + amt(Math.round(s.plan * 10) / 10, g.unit) + ' planned by now'; } },
       stalled: { cls: 'warn', text: function (s) { return 'Stalled · no progress in ' + h.plural(s.quietDays, 'day'); } },
       reached: { cls: 'good', text: function () { return 'Target reached · mark it achieved'; } },
-      active: { cls: '', text: function (s) { return s.lastProgress ? 'Last progress ' + h.fmt(s.lastProgress) : 'No progress logged yet'; } },
+      active: { cls: '', text: function (s) {
+        if (s.lastProgress) return 'Last update ' + h.fmt(s.lastProgress);
+        return s.measure === 'value' ? 'Started at ' + amt(s.startValue, s.unit) + ' · log a reading when it changes' : 'No progress logged yet';
+      } },
       achieved: { cls: 'good', text: function () { return 'Achieved'; } },
       abandoned: { cls: '', text: function () { return 'Abandoned'; } }
     };
@@ -402,7 +405,7 @@
       out += '<div class="stats">' + first +
         '<div class="stat"><b>' + esc(s.status === 'reached' || g.status !== 'active' ? s.pct + '%' : s.projected ? h.fmt(s.projected) : '–') + '</b><span>' + (s.status === 'reached' || g.status !== 'active' ? 'Of target' : 'Projected finish') + '</span></div>' +
         '<div class="stat"><b>' + esc(s.early ? '–' : (g.measure === 'value' && weekly > 0 ? '+' : '') + (g.unit === '$' ? amt(weekly, '$') : String(weekly))) + '</b><span>' + (g.measure === 'value' ? 'Change per week' : 'Per week, avg') + '</span></div></div>';
-      if (g.measure === 'value' && g.status === 'active') out += '<p class="settings-help">' + esc(L.goalProgressText(s)) + ' since ' + esc(h.fmt(g.started)) + ' (started at ' + esc(amt(s.startValue, g.unit)) + ').</p>';
+      if (g.measure === 'value' && g.status === 'active') out += '<p class="settings-help">' + esc(L.goalProgressText(s)) + ' (' + s.pct + '%). Started at ' + esc(amt(s.startValue, g.unit)) + ' on ' + esc(h.fmt(g.started)) + '.</p>';
 
       if (s.status === 'reached' && g.status === 'active') {
         out += '<div class="hint good">' + icon('check', 18) + '<span style="flex:1">You reached the target.</span><button class="linkish" data-action="g-goal-status" data-id="' + esc(id) + '" data-v="achieved">Mark achieved</button></div>';
