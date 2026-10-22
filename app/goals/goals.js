@@ -75,6 +75,10 @@
     function habitById(id) { return gs.data.habits.find(function (x) { return x.id === id; }); }
     function goalById(id) { return gs.data.goals.find(function (x) { return x.id === id; }); }
     function stats(hb) { return L.habitStats(hb, gs.data.checkins, h.today()); }
+    // Habits due today that aren't done or skipped yet.
+    function dueOpen() {
+      return gs.data.habits.filter(function (x) { if (x.status === 'archived') return false; var st = stats(x); return st.dueToday && !st.today; }).length;
+    }
     function gstats(g) { return L.goalStats(g, gs.data.progress, gs.data.checkins, gs.data.habits, h.today(), settings().stallDays); }
     function amt(n, unit) { return L.formatAmount(n, unit); }
     function streakText(s) {
@@ -272,7 +276,7 @@
         var C = 2 * Math.PI * 21, frac = doneN / due.length;
         out += '<section class="g-ring-card"><svg role="img" aria-label="' + doneN + ' of ' + due.length + ' habits done today" width="52" height="52" viewBox="0 0 52 52">' +
           '<circle cx="26" cy="26" r="21" fill="none" stroke="#EEF1F5" stroke-width="7"/>' +
-          '<circle cx="26" cy="26" r="21" fill="none" stroke="var(--accent)" stroke-width="7" stroke-linecap="round" stroke-dasharray="' + (C * frac).toFixed(1) + ' ' + C.toFixed(1) + '" transform="rotate(-90 26 26)"/></svg>' +
+          '<circle data-anim="g-ring" cx="26" cy="26" r="21" fill="none" stroke="var(--accent)" stroke-width="7" stroke-linecap="round" stroke-dasharray="' + (C * frac).toFixed(1) + ' ' + C.toFixed(1) + '" transform="rotate(-90 26 26)"/></svg>' +
           '<div><b>' + doneN + ' of ' + h.plural(due.length, 'habit') + ' done</b><span>' + esc(doneN === due.length ? 'Everything done for today.' : (settings().ha ? 'Home Assistant checks in at ' + h.pad(settings().checkinHour) + ':00' : 'Tap the circle when you\'ve done one.')) + '</span></div></section>';
       }
 
@@ -306,7 +310,7 @@
       if (s.skippedToday) meta = 'Skipped today · streak kept';
       var on = s.doneToday, skip = s.skippedToday;
       var label = (on ? 'Done today: ' : skip ? 'Skipped today: ' : 'Mark done today: ') + hb.name;
-      return '<div class="g-row' + (!s.dueToday && !s.today ? ' off' : '') + '">' +
+      return '<div class="g-row' + (!s.dueToday && !s.today ? ' off' : '') + (gs.pop === hb.id ? ' pop' : '') + '">' +
         '<button class="g-check' + (on ? ' on' : skip ? ' skip' : '') + '" data-action="g-check" data-id="' + esc(hb.id) + '" aria-pressed="' + on + '" aria-label="' + esc(label) + '">' + icon(skip ? 'skip' : 'checkBold', 18, 3) + '</button>' +
         '<a class="g-body" href="#/goals/h/' + esc(hb.id) + '"><span class="t">' + esc(hb.name) + '</span><span class="s">' + esc(meta) + '</span></a>' +
         (right ? '<span class="g-streak' + (on ? ' on' : '') + '">' + esc(right) + '</span>' : '') + '</div>';
@@ -328,7 +332,7 @@
     function goalCard(g) {
       var s = gstats(g), st = STATUS[s.status];
       return '<a class="g-goal" href="#/goals/g/' + esc(g.id) + '"><div class="g-goal-head"><span class="t">' + esc(g.name) + '</span><span class="v">' + esc(g.measure === 'value' ? amt(s.total, g.unit) + ' → ' + amt(s.target, g.unit) : g.measure === 'number' && g.unit === '$' ? amt(s.total, '$') : s.total + ' / ' + amt(s.target, g.unit === '$' ? '' : g.unit)) + '</span></div>' +
-        '<div class="g-bar" role="img" aria-label="' + s.pct + ' percent"><div class="' + st.cls + '" style="width:' + Math.max(s.pct, 2) + '%"></div></div>' +
+        '<div class="g-bar" role="img" aria-label="' + s.pct + ' percent"><div data-anim="gbar-' + esc(g.id) + '" class="' + st.cls + '" style="width:' + Math.max(s.pct, 2) + '%"></div></div>' +
         '<span class="g-status ' + st.cls + '">' + esc(st.text(s, g)) + '</span></a>';
     }
 
@@ -392,7 +396,7 @@
         var iso = m.y + '-' + h.pad(m.m + 1) + '-' + h.pad(dnum);
         var st = iso > t ? 'future' : s.dayState[iso] || (iso < s.started ? (map[iso] ? map[iso] : 'before') : 'off');
         var word = { done: 'done', skip: 'skip used', forgiven: 'missed, skip used', missed: 'missed', off: 'not scheduled', open: 'not done yet', future: '', before: '' }[st] || '';
-        var cls = 'g-day ' + st + (iso === t ? ' today' : '');
+        var cls = 'g-day ' + st + (iso === t ? ' today' : '') + (gs.pop === hb.id + '|' + iso ? ' pop' : '');
         if (iso > t) cells += '<span class="' + cls + '" aria-hidden="true">' + dnum + '</span>';
         else cells += '<button class="' + cls + '" data-action="g-day" data-v="' + iso + '" aria-label="' + esc(h.fmt(iso, true) + (word ? ', ' + word : '') + '. Tap to change.') + '">' + dnum + '</button>';
       }
@@ -517,7 +521,7 @@
       return '<section class="g-pace"><svg role="img" aria-label="' + esc(label) + '" viewBox="0 0 340 200" width="100%">' +
         '<line x1="' + X0 + '" y1="' + Y1 + '" x2="' + X1 + '" y2="' + Y1 + '" stroke="#EEF1F5"/><line x1="' + X0 + '" y1="' + ((Y0 + Y1) / 2) + '" x2="' + X1 + '" y2="' + ((Y0 + Y1) / 2) + '" stroke="#EEF1F5"/><line x1="' + X0 + '" y1="' + Y0 + '" x2="' + X1 + '" y2="' + Y0 + '" stroke="#DDE1E8"/>' +
         '<text x="0" y="' + (Y1 + 4) + '" class="g-axis">' + esc(shortNum(hi)) + '</text><text x="0" y="' + ((Y0 + Y1) / 2 + 4) + '" class="g-axis">' + esc(shortNum((hi + lo) / 2)) + '</text><text x="0" y="' + (Y0 + 4) + '" class="g-axis">' + esc(shortNum(lo)) + '</text>' +
-        plan + proj + '<polyline points="' + line + '" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>' +
+        plan + proj + '<polyline class="g-draw" pathLength="1" points="' + line + '" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>' +
         '<circle cx="' + x(g.status === 'active' ? t : (g.finished || t)).toFixed(1) + '" cy="' + y(s.total).toFixed(1) + '" r="6" fill="#fff" stroke="var(--accent)" stroke-width="3"/>' +
         '<text x="' + X0 + '" y="194" class="g-axis">' + esc(h.fmt(start)) + '</text><text x="' + ((X0 + X1) / 2) + '" y="194" class="g-axis" text-anchor="middle">' + esc(h.fmt(mid)) + '</text><text x="' + X1 + '" y="194" class="g-axis" text-anchor="end">' + esc(h.fmt(end)) + '</text></svg>' +
         '<div class="g-legend"><span><i class="done"></i>You</span>' + (g.due ? '<span><i class="plan"></i>Plan</span>' : '') + '</div>' +
@@ -628,6 +632,20 @@
       }
       out += '<div class="g-two">' + (f.editId ? '' : '<div class="field"><label for="g-start">Start</label><input class="input" type="date" id="g-start" name="started" value="' + esc(f.started) + '" max="' + h.today() + '"></div>') +
         '<div class="field"><label for="g-due">Deadline <span class="opt">(optional)</span></label><input class="input" type="date" id="g-due" name="due" value="' + esc(f.due) + '"></div></div>';
+      out += '<div id="g-preview" style="display:contents">' + goalPreview(f) + '</div>';
+      if (f.measure === 'checkins') {
+        var habits = gs.data.habits.filter(function (x) { return x.status !== 'archived'; });
+        out += '<div class="field"><span class="label" id="g-from">Count check-ins from</span>' + (habits.length
+          ? '<div class="chips" role="group" aria-labelledby="g-from">' + habits.map(function (x) { return chip('g-f-habit', x.id, f.habits.indexOf(x.id) >= 0, x.name); }).join('') + '</div>'
+          : '<span class="field-note">Add a habit first, then link it here.</span>') + '</div>';
+      } else {
+        out += '<span class="field-note">You\'ll get a nudge if nothing moves for ' + h.plural(settings().stallDays, 'day') + '.</span>';
+      }
+      return out;
+    }
+    // Milestones and pace for the goal form; updated in place while you type.
+    function goalPreview(f) {
+      var out = '';
       var draft = { measure: f.measure, target: parseFloat(String(f.target).replace(/[,$€£₹\s]/g, '')), startValue: parseFloat(String(f.startValue).replace(/[,$€£₹\s]/g, '')),
         unit: (f.unit || '').trim(), started: f.editId ? goalById(f.editId).started : f.started, due: f.due };
       var ms = f.measure === 'value' && !isFinite(draft.startValue) ? [] : L.goalMilestones(draft);
@@ -640,14 +658,6 @@
       if (pace) {
         out += '<div class="hint' + (pace.warn ? ' warn' : '') + '" role="' + (pace.warn ? 'alert' : 'status') + '" style="align-items:flex-start">' + icon('clock', 18) + '<span style="flex:1">' + esc(pace.text) +
           (pace.suggestedDue ? ' <button type="button" class="linkish" style="margin:0;font-size:13px" data-action="g-f-due" data-v="' + pace.suggestedDue + '">Use ' + esc(h.fmt(pace.suggestedDue, true)) + '</button>' : '') + '</span></div>';
-      }
-      if (f.measure === 'checkins') {
-        var habits = gs.data.habits.filter(function (x) { return x.status !== 'archived'; });
-        out += '<div class="field"><span class="label" id="g-from">Count check-ins from</span>' + (habits.length
-          ? '<div class="chips" role="group" aria-labelledby="g-from">' + habits.map(function (x) { return chip('g-f-habit', x.id, f.habits.indexOf(x.id) >= 0, x.name); }).join('') + '</div>'
-          : '<span class="field-note">Add a habit first, then link it here.</span>') + '</div>';
-      } else {
-        out += '<span class="field-note">You\'ll get a nudge if nothing moves for ' + h.plural(settings().stallDays, 'day') + '.</span>';
       }
       return out;
     }
@@ -684,10 +694,17 @@
         var g0 = goalById(f.goalId);
         if (g0.measure === 'value' ? !isFinite(a) || String(f.amount).trim() === '' : !isFinite(a) || !a) return fail(g0.measure === 'value' ? 'Enter the reading, like 196.4.' : 'Enter an amount, like 500.', 'amount');
         if (!h.validIso(f.date)) return fail('Pick a date.', 'date');
+        var before = gstats(g0);
         mutate({ action: 'addProgress', id: h.uid('P'), goalId: f.goalId, amount: a, date: f.date, note: (f.note || '').trim() });
         h.closeSheet();
         var s0 = gstats(g0);
-        h.toast('Logged · ' + L.goalProgressText(s0));
+        var hitsBefore = before.milestones.filter(function (m) { return m.hit; }).length;
+        var newHits = s0.milestones.filter(function (m) { return m.hit; });
+        if (s0.status === 'reached' && before.status !== 'reached') { h.motion.confetti(); h.toast('Target reached! ' + L.goalProgressText(s0)); }
+        else if (newHits.length > hitsBefore) {
+          h.motion.burst(window.innerWidth / 2, window.innerHeight * 0.35, { count: 22, spread: 70 });
+          h.toast('Milestone reached · ' + amt(newHits[newHits.length - 1].value, g0.unit));
+        } else h.toast('Logged · ' + L.goalProgressText(s0));
         return true;
       }
       var name = (f.name || '').trim();
@@ -745,22 +762,32 @@
       'g-check': function (el) {
         var hb = habitById(el.dataset.id), s = stats(hb), t = h.today();
         var to = s.doneToday ? 'none' : 'done';
+        var where = el.getBoundingClientRect();
+        var openBefore = dueOpen();
+        gs.pop = to === 'done' ? hb.id : null;
         checkin(hb.id, t, to);
         if (to === 'done') {
+          h.motion.burst(where.left + where.width / 2, where.top + where.height / 2);
           var after = stats(habitById(hb.id));
-          h.toast(after.weekTarget ? hb.name + ' · ' + after.weekDone + ' of ' + after.weekTarget + ' this week' : after.streak > 1 ? hb.name + ' · ' + after.streak + ' days in a row' : hb.name + ' · done');
+          if (openBefore > 0 && dueOpen() === 0) { h.motion.confetti(); h.toast('Everything done for today. Nice work!'); }
+          else h.toast(after.weekTarget ? hb.name + ' · ' + after.weekDone + ' of ' + after.weekTarget + ' this week' : after.streak > 1 ? hb.name + ' · ' + after.streak + ' days in a row' : hb.name + ' · done');
         }
+        setTimeout(function () { gs.pop = null; }, 600);
       },
       'g-day': function (el) {
         var hb = habitById(location.hash.split('/').pop());
         if (!hb) return;
         var date = el.dataset.v, cur = (gs.data.checkins.find(function (c) { return c.habitId === hb.id && c.date === date; }) || {}).result || 'none';
         var next = el.dataset.set || (hb.schedule === 'weekly' ? (cur === 'done' ? 'none' : 'done') : { none: 'done', done: 'skip', skip: 'none' }[cur]);
+        if (next === 'done') h.motion.burstAt(el, el.dataset.set ? null : { count: 10, spread: 24 });
+        gs.pop = hb.id + '|' + date;
         checkin(hb.id, date, next);
+        setTimeout(function () { gs.pop = null; }, 600);
       },
       'g-month': function (el) {
         var m = gs.month, n = m.m + Number(el.dataset.v);
         m.y += Math.floor(n / 12); m.m = ((n % 12) + 12) % 12;
+        h.motion.enter();
         h.render();
       },
       'g-menu': function () { gs.menu = !gs.menu; h.render(); },
@@ -779,6 +806,7 @@
       'g-goal-status': function (el) {
         var g = goalById(el.dataset.id), v = el.dataset.v; gs.menu = false;
         mutate({ action: 'updateGoal', id: g.id, status: v });
+        if (v === 'achieved') h.motion.confetti();
         h.toast(v === 'achieved' ? 'Goal achieved. Nice work.' : v === 'abandoned' ? 'Goal abandoned' : 'Goal reopened');
       },
       'g-delete-goal': function (el) {
@@ -786,7 +814,7 @@
         if (!window.confirm('Delete "' + g.name + '" and its progress? This also removes them from your Sheet.')) { h.render(); return; }
         mutate({ action: 'deleteGoal', id: g.id }); h.go('#/goals'); h.toast('Goal deleted');
       },
-      'g-view': function (el) { gs.view = el.dataset.v; h.render(); },
+      'g-view': function (el) { gs.view = el.dataset.v; h.motion.enter(); h.render(); },
       'g-log': function (el) { openForm('progress', el.dataset.id); },
       'g-del-entry': function (el) {
         var p = gs.data.progress.find(function (x) { return x.id === el.dataset.id; });
@@ -826,7 +854,10 @@
         if (t.id === 'g-target' || t.id === 'g-startv' || t.id === 'g-due' || t.id === 'g-start' || t.id === 'g-unit') {
           // milestone preview depends on these; redraw the sheet (focus is kept)
           clearTimeout(onInput.timer);
-          onInput.timer = setTimeout(function () { readForm(); h.renderSheet(); }, 250);
+          onInput.timer = setTimeout(function () {
+            var f = readForm(), box = document.getElementById('g-preview');
+            if (f && box && f.form === 'goal') box.innerHTML = goalPreview(f); // only the preview, never the fields being typed in
+          }, 250);
         }
         if (t.id === 'g-date') document.querySelectorAll('[data-action="set-date"][data-for="g-date"]').forEach(function (c) { c.setAttribute('aria-pressed', String(c.dataset.v === t.value)); });
       }

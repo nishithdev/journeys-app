@@ -315,3 +315,62 @@ mark { background: #FFE7A8; color: var(--ink); border-radius: 3px; padding: 0 1p
 .switch:checked::after { transform: translateX(20px); }
 .switch:focus-visible { outline: 3px solid var(--accent-3); outline-offset: 2px; }
 .switch:disabled { opacity: .5; }
+
+/* ---------- motion ---------- */
+/* Arriving on a screen: blocks rise into place one after another (delays are set in app.js). */
+@keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes reveal-x { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes grow-x { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes grow-y { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes pop-in { 0% { transform: scale(.4); opacity: 0; } 70% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); } }
+@keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 rgba(36, 81, 214, .35); } 70% { box-shadow: 0 0 0 9px rgba(36, 81, 214, 0); } 100% { box-shadow: 0 0 0 0 rgba(36, 81, 214, 0); } }
+@keyframes march-x { to { background-position: 20px 0; } }
+@keyframes march-y { to { background-position: 0 18px; } }
+@keyframes bob { 0%, 100% { transform: none; } 40% { transform: translateY(-3px) scale(1.08); } }
+@keyframes dot-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .4; transform: scale(.7); } }
+@keyframes draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 14px) scale(.96); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes toast-bump { 0% { transform: translate(-50%, 0) scale(1); } 40% { transform: translate(-50%, 0) scale(1.04); } 100% { transform: translate(-50%, 0) scale(1); } }
+@keyframes sheet-down { to { transform: translateY(60px); opacity: 0; } }
+@keyframes fade-out { to { opacity: 0; } }
+
+.enter .rise { animation: rise .42s cubic-bezier(.2, .8, .2, 1) both; }
+.enter .mini { animation: reveal-x .8s cubic-bezier(.3, .7, .2, 1) .15s both; }
+.enter .tl-line { transform-origin: top; animation: grow-y .45s ease-out both; animation-delay: calc(var(--d, 0ms) + 150ms); }
+.enter .tl-node { animation: pop-in .4s cubic-bezier(.3, .8, .3, 1.2) both; animation-delay: calc(var(--d, 0ms) + 60ms); }
+.enter .tl-node.cur { animation: pop-in .4s cubic-bezier(.3, .8, .3, 1.2) calc(var(--d, 0ms) + 60ms) both, pulse-ring 2.4s ease-out 1s infinite; }
+.enter .fill, .enter .spanbar div { transform-origin: left; animation: grow-x .8s cubic-bezier(.2, .8, .2, 1) .1s both; }
+.enter .outcome-bar .ob { transform-origin: left; animation: grow-x .7s cubic-bezier(.2, .8, .2, 1) .1s both; }
+.enter .yh-bar { transform-origin: bottom; animation: grow-y .7s cubic-bezier(.2, .8, .2, 1) both; }
+.enter .yh-col:nth-child(2n) .yh-bar { animation-delay: .05s; } .enter .yh-col:nth-child(3n) .yh-bar { animation-delay: .1s; }
+.enter .cal-dots i { animation: pop-in .35s ease-out .2s both; }
+.enter .tab[aria-current="page"] svg { animation: bob .5s ease-out; }
+
+/* Ongoing: waiting gaps march, the current step breathes, syncing pulses. */
+.mini .g.wait { background: repeating-linear-gradient(90deg, var(--warn-dash) 0 6px, transparent 6px 10px); background-size: 20px 3px; animation: march-x 1.1s linear infinite; }
+.tl-line.wait { background: repeating-linear-gradient(180deg, var(--rail) 0 5px, transparent 5px 9px); background-size: 2px 18px; animation: march-y 1.2s linear infinite; }
+.tl-node.cur, .mini .n.cur { animation: pulse-ring 2.4s ease-out infinite; }
+.sync.pending .dot { animation: dot-pulse 1.2s ease-in-out infinite; }
+
+/* Touch feedback */
+.btn, .chip, .icon-btn, .card, .row-card, .tab, .outcome-opt, .cal-day, .seg-item, .fab, .tl-item { transition: transform .12s ease, background-color .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease; }
+.btn:active, .chip:active, .icon-btn:active, .outcome-opt:active, .cal-day:active, .seg-item:active { transform: scale(.96); }
+.card:active, .row-card:active, .tl-item:active { transform: scale(.985); }
+.fab:active { transform: scale(.92) rotate(90deg); }
+.tab:active svg { transform: scale(.88); }
+.tab svg { transition: transform .15s ease; }
+
+/* Sheets slide away; toasts rise and fade. */
+.scrim.closing { pointer-events: none; animation: fade-out .2s ease-in forwards; }
+.scrim.closing .sheet { animation: sheet-down .2s ease-in forwards; }
+.toast { animation: toast-in .25s cubic-bezier(.2, .8, .2, 1); }
+.toast.bump { animation: toast-bump .25s ease-out; }
+.toast.out { transition: opacity .2s ease, transform .2s ease; opacity: 0; transform: translate(-50%, 8px); }
+
+/* Celebrations (created by app.js) */
+.spark { position: fixed; z-index: 40; width: 7px; height: 7px; border-radius: 4px; pointer-events: none; }
+.confetti { position: fixed; top: 0; z-index: 40; width: 8px; height: 12px; border-radius: 2px; pointer-events: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

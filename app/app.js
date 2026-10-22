@@ -366,6 +366,7 @@
       today: today, addDays: addDays, days: days, validIso: validIso, fmt: fmt, plural: plural, uid: uid, pad: pad,
       isDemo: isDemo, load: load, store: store, dateField: dateField, syncPill: syncPill, settingsCall: settingsCall, haCall: haCall,
       token: function () { return cfg.token; }, server: function () { return state.server; },
+      motion: { burst: burst, burstAt: burstAt, confetti: confetti, enter: markEnter, reduced: reduceMotion },
       MONTHS: MONTHS, MONTHS_LONG: MONTHS_LONG, WEEKDAYS: WEEKDAYS
     }
   };
@@ -389,6 +390,102 @@
   }
   function go(hash) { if (location.hash !== hash) location.hash = hash; else render(); }
 
+  // ---------- motion ----------
+  // Screens animate in only when you arrive on them (not on every refresh from a sync), values slide
+  // from their previous number, and a few moments get a small celebration. All of it is skipped when
+  // the phone asks for reduced motion.
+  var motionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+  function reduceMotion() { return !!(motionQuery && motionQuery.matches); }
+  var lastScreen = null, forceEnter = false, enterTimer = null;
+  var animMemory = {};
+  function markEnter() { forceEnter = true; }
+  function stagger(scope) {
+    var i = 0;
+    var groups = scope.querySelectorAll('.screen > *:not(.menu), .tl > *, .g-list > *, .result-list > *, .tiles > *, .stats > *, .chips > *');
+    groups.forEach(function (el) {
+      if (el.closest('.tabbar') || el.classList.contains('fab')) return;
+      var d = Math.min(i++ * 35, 420) + 'ms';
+      el.classList.add('rise');
+      el.style.animationDelay = d;
+      el.style.setProperty('--d', d); // children (timeline nodes and lines) follow their row
+    });
+  }
+  // Elements with data-anim="key" slide their width (or a ring's dash) from the value they had last time.
+  function animateValues(scope, entering) {
+    scope.querySelectorAll('[data-anim]').forEach(function (el) {
+      var key = el.getAttribute('data-anim'), ring = el.tagName.toLowerCase() === 'circle';
+      var to = ring ? el.getAttribute('stroke-dasharray') : el.style.width;
+      var from = animMemory[key];
+      if (from == null && entering) from = ring ? '0 999' : '0%';
+      animMemory[key] = to;
+      if (from == null || from === to || reduceMotion()) return;
+      var prop = ring ? 'strokeDasharray' : 'width';
+      el.style.transition = 'none';
+      el.style[prop] = from;
+      el.getBoundingClientRect(); // apply the start value before transitioning
+      el.style.transition = (ring ? 'stroke-dasharray' : 'width') + ' .8s cubic-bezier(.2, .8, .2, 1)';
+      el.style[prop] = to;
+    });
+  }
+  // Numbers in stat tiles count up when a screen opens.
+  function countUp(scope) {
+    scope.querySelectorAll('.stat b, .tile b, .big-num b, .yh-stats b, .g-ring-card b').forEach(function (el) {
+      var node = el.firstChild;
+      if (!node || node.nodeType !== 3) return;
+      var m = /^(\D*)(\d+)(.*)$/.exec(node.nodeValue);
+      if (!m || +m[2] < 2 || m[3].charAt(0) === '.' || m[3].charAt(0) === ',') return;
+      var target = +m[2], start = performance.now(), dur = Math.min(900, 300 + target * 15);
+      (function step(now) {
+        var t = Math.min(1, (now - start) / dur), e = 1 - Math.pow(1 - t, 3);
+        node.nodeValue = m[1] + Math.round(target * e) + m[3];
+        if (t < 1 && node.parentNode) requestAnimationFrame(step);
+      })(start);
+    });
+  }
+  var SPARK_COLORS = ['#2451D6', '#6E8FE8', '#A9BDF2', '#2E9E5B', '#E8833A', '#F2C14E'];
+  // A small burst of sparks around a point, e.g. a habit's check circle.
+  function burst(x, y, opts) {
+    if (reduceMotion() || !document.body.animate) return;
+    opts = opts || {};
+    var n = opts.count || 14, spread = opts.spread || 34;
+    for (var i = 0; i < n; i++) {
+      var p = document.createElement('i');
+      p.className = 'spark';
+      p.style.left = x + 'px'; p.style.top = y + 'px';
+      p.style.background = SPARK_COLORS[i % SPARK_COLORS.length];
+      document.body.appendChild(p);
+      var a = Math.PI * 2 * i / n + Math.random() * 0.4, d = spread + Math.random() * 18;
+      p.animate([
+        { transform: 'translate(-50%, -50%) scale(1)', opacity: 1 },
+        { transform: 'translate(calc(-50% + ' + (Math.cos(a) * d).toFixed(1) + 'px), calc(-50% + ' + (Math.sin(a) * d).toFixed(1) + 'px)) scale(.2)', opacity: 0 }
+      ], { duration: 520 + Math.random() * 240, easing: 'cubic-bezier(.15, .8, .3, 1)' }).onfinish = (function (el) { return function () { el.remove(); }; })(p);
+    }
+  }
+  function burstAt(el, opts) {
+    if (!el) return;
+    var r = el.getBoundingClientRect();
+    burst(r.left + r.width / 2, r.top + r.height / 2, opts);
+  }
+  // Confetti across the screen, for finishing something big.
+  function confetti() {
+    if (reduceMotion() || !document.body.animate) return;
+    var w = window.innerWidth, h = window.innerHeight;
+    for (var i = 0; i < 70; i++) {
+      var p = document.createElement('i');
+      p.className = 'confetti';
+      p.style.left = (Math.random() * w) + 'px';
+      p.style.background = SPARK_COLORS[i % SPARK_COLORS.length];
+      if (i % 3 === 0) p.style.borderRadius = '50%';
+      document.body.appendChild(p);
+      var drift = (Math.random() - 0.5) * 160, spin = (Math.random() - 0.5) * 900;
+      p.animate([
+        { transform: 'translate(0, -20px) rotate(0deg)', opacity: 1 },
+        { transform: 'translate(' + (drift / 2).toFixed(0) + 'px, ' + (h * 0.55).toFixed(0) + 'px) rotate(' + (spin / 2).toFixed(0) + 'deg)', opacity: 1, offset: 0.6 },
+        { transform: 'translate(' + drift.toFixed(0) + 'px, ' + (h + 40) + 'px) rotate(' + spin.toFixed(0) + 'deg)', opacity: 0 }
+      ], { duration: 1500 + Math.random() * 1100, delay: Math.random() * 250, easing: 'cubic-bezier(.25, .6, .45, 1)' }).onfinish = (function (el) { return function () { el.remove(); }; })(p);
+    }
+  }
+
   // ---------- rendering ----------
   var root = document.getElementById('app');
   var sheetRoot = document.createElement('div');
@@ -409,7 +506,19 @@
     else html = homeScreen() + tabbar('home');
     var active = document.activeElement;
     var keepFocus = active && active.id && root.contains(active) ? { id: active.id, val: active.value, s: active.selectionStart } : null;
+    // Animate in only when arriving on a screen (or when a view inside it switches).
+    var screenKey = location.hash || '#/';
+    var entering = (screenKey !== lastScreen || forceEnter) && !reduceMotion();
+    lastScreen = screenKey; forceEnter = false;
+    root.classList.toggle('enter', entering);
     root.innerHTML = html;
+    if (entering) {
+      stagger(root);
+      countUp(root);
+      clearTimeout(enterTimer);
+      enterTimer = setTimeout(function () { root.classList.remove('enter'); }, 1400);
+    }
+    animateValues(root, entering);
     if (keepFocus) {
       var el = document.getElementById(keepFocus.id);
       if (el) { el.value = keepFocus.val; el.focus(); try { el.setSelectionRange(keepFocus.s, keepFocus.s); } catch (e) { /* not a text field */ } }
@@ -717,7 +826,7 @@
         '<div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn secondary small" data-action="reset-demo">Reset sample data</button>' +
         '<button class="btn danger small" data-action="clear-demo">Clear all</button></div></section>';
     }
-    h += '<p class="settings-help" style="text-align:center">Journeys v2.5</p></main>';
+    h += '<p class="settings-help" style="text-align:center">Journeys v2.6</p></main>';
     return h;
   }
 
@@ -1449,7 +1558,20 @@
 
   function renderSheet() {
     var sh = state.sheet;
-    if (!sh) { sheetRoot.innerHTML = ''; sheetRoot.dataset.key = ''; document.body.style.overflow = ''; return; }
+    if (!sh) {
+      sheetRoot.dataset.key = ''; document.body.style.overflow = '';
+      var old = sheetRoot.firstChild;
+      if (old && old.classList && !reduceMotion()) {
+        if (!old.classList.contains('closing')) {
+          old.classList.add('closing'); // slide down, then remove
+          clearTimeout(sheetTimer);
+          sheetTimer = setTimeout(function () { if (!state.sheet) sheetRoot.innerHTML = ''; }, 200);
+        }
+      } else sheetRoot.innerHTML = '';
+      return;
+    }
+    clearTimeout(sheetTimer);
+    if (sheetRoot.firstChild && sheetRoot.firstChild.classList && sheetRoot.firstChild.classList.contains('closing')) { sheetRoot.innerHTML = ''; sheetRoot.dataset.key = ''; }
     if (sh.kind === 'finish') {
       var fj = journeyById(sh.jid);
       if (!fj) { state.sheet = null; sheetRoot.innerHTML = ''; return; }
@@ -1492,13 +1614,17 @@
   }
 
   // ---------- toast ----------
-  var toastTimer;
+  var toastTimer, sheetTimer;
   function toast(msg) {
     var el = document.querySelector('.toast');
     if (!el) { el = document.createElement('div'); el.className = 'toast'; el.setAttribute('role', 'status'); document.body.appendChild(el); }
+    else { el.classList.remove('out'); el.classList.remove('bump'); el.getBoundingClientRect(); el.classList.add('bump'); }
     el.textContent = msg;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { el.remove(); }, 3200);
+    toastTimer = setTimeout(function () {
+      el.classList.add('out');
+      toastTimer = setTimeout(function () { el.remove(); }, reduceMotion() ? 0 : 220);
+    }, 3200);
   }
 
   // ---------- events ----------
@@ -1577,13 +1703,14 @@
     'search-open': function (el) { rememberSearch(state.search.q); go(el.dataset.href); },
     'cal-day': function (el) { state.cal.sel = el.dataset.v; render(); },
     'cal-nav': function (el) {
+      markEnter();
       var c = state.cal, m = c.m + Number(el.dataset.v);
       c.y += Math.floor(m / 12); c.m = ((m % 12) + 12) % 12;
       c.sel = c.y + '-' + pad(c.m + 1) + '-01';
       render();
     },
     'cal-today': function () { state.cal = null; render(); },
-    'year-nav': function (el) { state.year = (state.year || +today().slice(0, 4)) + Number(el.dataset.v); render(); },
+    'year-nav': function (el) { markEnter(); state.year = (state.year || +today().slice(0, 4)) + Number(el.dataset.v); render(); },
     'edit-step': function (el) { openStepSheet(route().id, el.dataset.id); },
     'close-sheet': closeSheet,
     'scrim': function (el, ev) { if (ev.target === el) closeSheet(); },
@@ -1741,6 +1868,7 @@
       addStep(fs.jid, stepName, fs.date, (fs.notes || '').trim(), true, fs.outcome);
       state.sheet = null; render();
       toast(fs.outcome ? 'Journey finished · ' + outcomeOf(fs.outcome).label : 'Journey finished');
+      if (fs.outcome === 'got') confetti();
       return;
     }
     if (f.id === 'new-form') {

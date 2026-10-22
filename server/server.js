@@ -44,7 +44,7 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || '/data');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const SHEETS_BASE = (process.env.SHEETS_API_BASE || 'https://sheets.googleapis.com/v4/spreadsheets').replace(/\/$/, '');
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
-const VERSION = '2.5.0';
+const VERSION = '2.6.0';
 const MCP_ALLOWED_ORIGINS = (process.env.MCP_ALLOWED_ORIGINS || '').split(',').map((x) => x.trim()).filter(Boolean);
 const NUDGE_CHECK_MS = intEnv('NUDGE_CHECK_MS', 10 * 60 * 1000, 200, 24 * 3600 * 1000);
 
