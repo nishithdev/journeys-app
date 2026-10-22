@@ -15,12 +15,13 @@ const crypto = require('crypto');
 const TABS = {
   habits: { title: 'Habits', headers: ['Habit ID', 'Habit', 'Schedule', 'Times a week', 'Days', 'Skips a week', 'Goal ID', 'Reminder', 'Created', 'Status', 'Last reminded'], dates: [8, 10] },
   checkins: { title: 'Check-ins', headers: ['Check-in ID', 'Habit ID', 'Habit', 'Date', 'Result', 'Source'], dates: [3] },
-  goals: { title: 'Goals', headers: ['Goal ID', 'Goal', 'Measure', 'Target', 'Unit', 'Started', 'Due', 'Milestones', 'Status', 'Finished', 'Last nudged'], dates: [5, 6, 9, 10] },
+  goals: { title: 'Goals', headers: ['Goal ID', 'Goal', 'Measure', 'Target', 'Unit', 'Started', 'Due', 'Milestones', 'Status', 'Finished', 'Last nudged', 'Start value'], dates: [5, 6, 9, 10] },
   progress: { title: 'Goal progress', headers: ['Entry ID', 'Goal ID', 'Goal', 'Date', 'Amount', 'Total', 'Note'], dates: [3] }
 };
 const KEYS = Object.keys(TABS);
 const SCHEDULES = { daily: 'Every day', weekly: 'Times a week', days: 'Set days' };
-const MEASURES = { number: 'Number', checkins: 'Check-ins' };
+// number: amounts add up · checkins: counts linked habit check-ins · value: readings move from a start value to the target (e.g. weight)
+const MEASURES = { number: 'Number', checkins: 'Check-ins', value: 'Reach a number' };
 const GOAL_STATUS = { active: 'Active', achieved: 'Achieved', abandoned: 'Abandoned' };
 const SOURCES = { app: 'App', ha: 'Home Assistant', mcp: 'AI assistant' };
 
@@ -120,7 +121,7 @@ function init(x) {
         id: String(row[0]).trim(), name: str(row[1]), measure: idFrom(MEASURES, row[2], 'number'),
         target: num(row[3], 0), unit: str(row[4]).trim(), started: toIso(row[5]), due: toIso(row[6]),
         milestones: L.parseMilestones(row[7]), status: idFrom(GOAL_STATUS, row[8], 'active'),
-        finished: toIso(row[9]), lastNudged: toIso(row[10])
+        finished: toIso(row[9]), lastNudged: toIso(row[10]), startValue: num(row[11], 0)
       })),
       progress: (pr || []).filter(hasId).map((row) => ({
         id: String(row[0]).trim(), goalId: str(row[1]).trim(), date: toIso(row[3]), amount: num(row[4], 0), note: str(row[6])
@@ -141,13 +142,14 @@ function init(x) {
         h.schedule === 'weekly' ? '' : h.skips, h.goalId || '', !!h.reminder, dc(h.created), h.status === 'archived' ? 'Archived' : 'Active', dc(h.lastReminded)]),
       checkins: d.checkins.slice().sort(byNameThenDate(hName, 'habitId')).map((c) => [c.id, c.habitId, hName[c.habitId] || '', dc(c.date), c.result === 'skip' ? 'Skip' : 'Done', SOURCES[c.source] || 'App']),
       goals: d.goals.map((g) => [g.id, g.name, MEASURES[g.measure], g.target, g.unit || '', dc(g.started), dc(g.due), L.formatMilestones(g.milestones),
-        GOAL_STATUS[g.status], dc(g.finished), dc(g.lastNudged)]),
+        GOAL_STATUS[g.status], dc(g.finished), dc(g.lastNudged), g.measure === 'value' ? g.startValue : '']),
       progress: []
     };
     let cur = null, total = 0;
     d.progress.slice().sort(byNameThenDate(gName, 'goalId')).forEach((p) => {
       if (p.goalId !== cur) { cur = p.goalId; total = 0; }
-      total = Math.round((total + p.amount) * 100) / 100;
+      const goal = d.goals.find((g) => g.id === p.goalId);
+      total = goal && goal.measure === 'value' ? p.amount : Math.round((total + p.amount) * 100) / 100; // readings: the latest one
       rows.progress.push([p.id, p.goalId, gName[p.goalId] || '', dc(p.date), p.amount, total, p.note || '']);
     });
     const data = [];
@@ -222,14 +224,18 @@ function init(x) {
         if (d.goals.some((g) => g.id === id)) return { id };
         const name = clean(b.name, 120);
         if (!name) throw userError('Goal needs a name.');
+        const measure = idFrom(MEASURES, b.measure, 'number');
         const target = amount(b.target, 'Target');
-        if (!(target > 0)) throw userError('Target must be more than 0.');
+        let startValue = 0;
+        if (measure === 'value') {
+          startValue = amount(b.startValue, 'Starting value');
+          if (target === startValue) throw userError('The goal must be different from where you start.');
+        } else if (!(target > 0)) throw userError('Target must be more than 0.');
         const started = dateOr(b.started, today());
         const due = dateOr(b.due, '');
         if (due && due <= started) throw userError('The deadline must be after the start.');
-        const measure = idFrom(MEASURES, b.measure, 'number');
-        const g = { id, name, measure, target, unit: clean(b.unit, 20) || (measure === 'checkins' ? 'times' : ''), started, due, milestones: [], status: 'active', finished: '', lastNudged: '' };
-        g.milestones = Array.isArray(b.milestones) ? cleanMilestones(b.milestones) : L.evenMilestones(target, started, due);
+        const g = { id, name, measure, target, startValue, unit: clean(b.unit, 20) || (measure === 'checkins' ? 'times' : ''), started, due, milestones: [], status: 'active', finished: '', lastNudged: '' };
+        g.milestones = Array.isArray(b.milestones) ? cleanMilestones(b.milestones) : L.goalMilestones(g);
         d.goals.push(g);
         return { id };
       }
@@ -238,10 +244,12 @@ function init(x) {
         let reshape = false;
         if (b.name != null) { const n = clean(b.name, 120); if (!n) throw userError('Goal needs a name.'); g.name = n; }
         if (b.unit != null) g.unit = clean(b.unit, 20);
-        if (b.target != null) { const t = amount(b.target, 'Target'); if (!(t > 0)) throw userError('Target must be more than 0.'); g.target = t; reshape = true; }
+        if (b.target != null) { const t = amount(b.target, 'Target'); if (g.measure !== 'value' && !(t > 0)) throw userError('Target must be more than 0.'); g.target = t; reshape = true; }
+        if (b.startValue != null && g.measure === 'value') { g.startValue = amount(b.startValue, 'Starting value'); reshape = true; }
+        if (g.measure === 'value' && g.target === g.startValue) throw userError('The goal must be different from where you start.');
         if (b.due !== undefined) { g.due = dateOr(b.due, ''); if (g.due && g.due <= g.started) throw userError('The deadline must be after the start.'); reshape = true; }
         if (Array.isArray(b.milestones)) g.milestones = cleanMilestones(b.milestones);
-        else if (reshape) g.milestones = L.evenMilestones(g.target, g.started, g.due);
+        else if (reshape) g.milestones = L.goalMilestones(g);
         if (b.status != null) {
           const s = idFrom(GOAL_STATUS, b.status, null);
           if (!s) throw userError('Status must be active, achieved or abandoned.');
@@ -260,8 +268,8 @@ function init(x) {
         if (g.measure === 'checkins') throw userError('This goal counts habit check-ins by itself.');
         const id = clean(b.id, 40) || newId('P');
         if (d.progress.some((p) => p.id === id)) return { id };
-        const a = amount(b.amount, 'Amount');
-        if (!a) throw userError('Amount can\'t be 0.');
+        const a = amount(b.amount, g.measure === 'value' ? 'Reading' : 'Amount');
+        if (!a && g.measure !== 'value') throw userError('Amount can\'t be 0.');
         d.progress.push({ id, goalId: g.id, date: dateOr(b.date, today()), amount: a, note: clean(b.note, 500) });
         return { id };
       }
@@ -277,7 +285,7 @@ function init(x) {
   }
   function cleanMilestones(list) {
     return list.map((m) => ({ value: amount(m && m.value, 'Milestone'), due: dateOr(m && m.due, '') }))
-      .filter((m) => m.value > 0 && m.due).sort((a, b) => a.value - b.value).slice(0, 24);
+      .filter((m) => m.due).sort((a, b) => a.due.localeCompare(b.due)).slice(0, 24);
   }
 
   const view = (d) => ({
@@ -330,7 +338,7 @@ function init(x) {
     const s = L.goalStats(g, d.progress, d.checkins, d.habits, t, conf.goalStallDays);
     return {
       id: g.id, name: g.name, measure: g.measure, progress: s.total, target: s.target, unit: s.unit, percent: s.pct,
-      progress_text: L.progressText(s.total, s.target, s.unit),
+      progress_text: L.goalProgressText(s), start_value: s.startValue,
       status: s.status, started: g.started, due: g.due || null, days_left: s.daysLeft, projected_finish: s.projected,
       last_progress: s.lastProgress, days_without_progress: s.quietDays,
       next_milestone: s.next ? { value: s.next.value, due: s.next.due } : null,
@@ -388,7 +396,8 @@ function init(x) {
           if (s.status !== 'stalled') continue;
           if (validIso(g.lastNudged) && days(g.lastNudged, t) < 7) continue;
           const actions = [];
-          if (g.measure === 'number') actions.push({ action: `GOAL_LOG:${g.id}`, title: 'Log progress', behavior: 'textInput', textInputButtonTitle: 'Add', textInputPlaceholder: g.unit ? `How much? (${g.unit})` : 'How much?' });
+          if (g.measure === 'value') actions.push({ action: `GOAL_LOG:${g.id}`, title: 'Log a reading', behavior: 'textInput', textInputButtonTitle: 'Save', textInputPlaceholder: g.unit ? `Today's reading (${g.unit})` : "Today's reading" });
+          else if (g.measure === 'number') actions.push({ action: `GOAL_LOG:${g.id}`, title: 'Log progress', behavior: 'textInput', textInputButtonTitle: 'Add', textInputPlaceholder: g.unit ? `How much? (${g.unit})` : 'How much?' });
           actions.push({ action: `GOAL_SNOOZE:${g.id}`, title: 'Not now' });
           const next = s.next ? ` Next milestone: ${L.formatAmount(s.next.value, s.unit)} by ${s.next.due}.` : '';
           await haNotify({ title: `"${g.name}" has stalled`, message: `No progress in ${plural(s.quietDays, 'day')}.${next}`, data: { tag: `goal-${g.id}`, group: 'journeys-goals', actions } });
@@ -416,7 +425,7 @@ function init(x) {
     if (kind === 'GOAL_LOG') {
       const { result, d } = await change({ action: 'addProgress', goalId: id, amount: body.reply, date: today() });
       const g = d.goals.find((x) => x.id === id), s = L.goalStats(g, d.progress, d.checkins, d.habits, today(), conf.goalStallDays);
-      haNotify({ title: g.name, message: `Logged. ${L.progressText(s.total, s.target, s.unit)} so far.`, data: { tag: `goal-${g.id}`, group: 'journeys-goals' } })
+      haNotify({ title: g.name, message: `Logged. ${L.goalProgressText(s)}.`, data: { tag: `goal-${g.id}`, group: 'journeys-goals' } })
         .catch((e) => console.warn('[goals] confirmation not sent:', e.message));
       return result;
     }
@@ -551,23 +560,26 @@ function init(x) {
         description: 'Create a goal with a target. With a deadline, it is split into 4 evenly spaced milestones. measure=checkins counts done check-ins of habits linked to it.',
         inputSchema: { type: 'object', properties: {
           name: s('The goal, e.g. "Save $10k for a car".'),
-          target: { type: 'number', description: 'Target amount, e.g. 10000.' },
+          target: { type: 'number', description: 'Target, e.g. 10000 to save, or 180 to reach that weight.' },
+          start_value: { type: 'number', description: 'For measure=value: where you are now, e.g. 200 (current weight).' },
           unit: s('Unit, e.g. "$", "books", "km". Optional.'),
           due: s('Optional deadline, YYYY-MM-DD.'),
-          measure: s('number (you log progress) or checkins (counts linked habit check-ins).', { enum: ['number', 'checkins'], default: 'number' })
+          measure: s('number (logged amounts add up), value (log readings that move from start_value to target, up or down, e.g. weight), or checkins (counts linked habit check-ins).', { enum: ['number', 'value', 'checkins'], default: 'number' })
         }, required: ['name', 'target'], additionalProperties: false },
         annotations: Object.assign({ title: 'Add a goal' }, WRITE),
         async run(a) {
-          const { result, d } = await change({ action: 'addGoal', name: a.name, target: a.target, unit: a.unit, due: a.due ? parseDate(a.due, 'due') : '', measure: a.measure || 'number' });
+          if (a.measure === 'value' && a.start_value == null) throw userError('For measure=value, give start_value (where you are now).');
+          const { result, d } = await change({ action: 'addGoal', name: a.name, target: a.target, startValue: a.start_value, unit: a.unit, due: a.due ? parseDate(a.due, 'due') : '', measure: a.measure || 'number' });
           const f = goalFacts(d, d.goals.find((g) => g.id === result.id), today());
-          return { text: `Added goal "${f.name}" (${f.id}): ${f.progress_text}${f.milestones.length ? `. Milestones: ${f.milestones.map((m) => `${L.formatAmount(m.value, f.unit)} by ${m.due}`).join(', ')}` : ''}.`, data: f };
+          const pace = L.goalPace(d.goals.find((g) => g.id === result.id));
+          return { text: `Added goal "${f.name}" (${f.id}): ${f.progress_text}${f.milestones.length ? `. Milestones: ${f.milestones.map((m) => `${L.formatAmount(m.value, f.unit)} by ${m.due}`).join(', ')}` : ''}.${pace ? ' ' + pace.text : ''}`, data: f };
         }
       },
       {
         name: 'log_progress', title: 'Log goal progress',
-        description: 'Add progress to a number goal, e.g. 500 toward a savings goal, or 1 book. Use a negative amount to correct.',
+        description: 'Add progress to a goal: for number goals an amount that adds up (500 toward savings, 1 book; negative to correct); for value goals the new reading (e.g. today\'s weight, 196.4).',
         inputSchema: { type: 'object', properties: {
-          goal: s('Goal id or name.'), amount: { type: 'number', description: 'How much to add.' },
+          goal: s('Goal id or name.'), amount: { type: 'number', description: 'How much to add, or the new reading for value goals.' },
           date: s('YYYY-MM-DD, "today" or "yesterday". Defaults to today.'), note: s('Optional note.')
         }, required: ['goal', 'amount'], additionalProperties: false },
         annotations: Object.assign({ title: 'Log goal progress' }, WRITE),

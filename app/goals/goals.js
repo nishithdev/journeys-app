@@ -162,7 +162,9 @@
           break;
         }
         case 'addGoal':
-          d.goals.push({ id: b.id, name: b.name, measure: b.measure, target: +b.target, unit: b.unit || '', started: b.started || t, due: b.due || '', milestones: L.evenMilestones(+b.target, b.started || t, b.due), status: 'active', finished: '' });
+          var ng = { id: b.id, name: b.name, measure: b.measure, target: +b.target, startValue: +b.startValue || 0, unit: b.unit || '', started: b.started || t, due: b.due || '', status: 'active', finished: '' };
+          ng.milestones = L.goalMilestones(ng);
+          d.goals.push(ng);
           break;
         case 'updateGoal': {
           var g = d.goals.find(function (x) { return x.id === b.id; });
@@ -171,8 +173,9 @@
           if (b.name != null) g.name = b.name;
           if (b.unit != null) g.unit = b.unit;
           if (b.target != null) { g.target = +b.target; reshape = true; }
+          if (b.startValue != null) { g.startValue = +b.startValue; reshape = true; }
           if (b.due !== undefined) { g.due = b.due || ''; reshape = true; }
-          if (reshape) g.milestones = L.evenMilestones(g.target, g.started, g.due);
+          if (reshape) g.milestones = L.goalMilestones(g);
           if (b.status != null) { g.status = b.status; g.finished = b.status === 'active' ? '' : t; }
           break;
         }
@@ -264,7 +267,7 @@
       if (finished.length) {
         out += '<div class="section-label">Finished</div>' + finished.map(function (g) {
           var s = gstats(g);
-          return '<a class="row-card" href="#/goals/g/' + esc(g.id) + '"><div style="min-width:0"><div class="t">' + esc(g.name) + '</div><div class="s">' + (g.status === 'achieved' ? 'Achieved' : 'Abandoned') + (g.finished ? ' ' + esc(h.fmt(g.finished)) : '') + ' · ' + esc(L.progressText(s.total, s.target, s.unit)) + '</div></div>' + icon('chevron', 20) + '</a>';
+          return '<a class="row-card" href="#/goals/g/' + esc(g.id) + '"><div style="min-width:0"><div class="t">' + esc(g.name) + '</div><div class="s">' + (g.status === 'achieved' ? 'Achieved' : 'Abandoned') + (g.finished ? ' ' + esc(h.fmt(g.finished)) : '') + ' · ' + esc(L.goalProgressText(s)) + '</div></div>' + icon('chevron', 20) + '</a>';
         }).join('');
       }
       return out + '</main>';
@@ -296,7 +299,7 @@
     };
     function goalCard(g) {
       var s = gstats(g), st = STATUS[s.status];
-      return '<a class="g-goal" href="#/goals/g/' + esc(g.id) + '"><div class="g-goal-head"><span class="t">' + esc(g.name) + '</span><span class="v">' + esc(g.measure === 'number' && g.unit === '$' ? amt(s.total, '$') : s.total + ' / ' + amt(s.target, g.unit === '$' ? '' : g.unit)) + '</span></div>' +
+      return '<a class="g-goal" href="#/goals/g/' + esc(g.id) + '"><div class="g-goal-head"><span class="t">' + esc(g.name) + '</span><span class="v">' + esc(g.measure === 'value' ? amt(s.total, g.unit) + ' → ' + amt(s.target, g.unit) : g.measure === 'number' && g.unit === '$' ? amt(s.total, '$') : s.total + ' / ' + amt(s.target, g.unit === '$' ? '' : g.unit)) + '</span></div>' +
         '<div class="g-bar" role="img" aria-label="' + s.pct + ' percent"><div class="' + st.cls + '" style="width:' + Math.max(s.pct, 2) + '%"></div></div>' +
         '<span class="g-status ' + st.cls + '">' + esc(st.text(s, g)) + '</span></a>';
     }
@@ -338,7 +341,7 @@
       out += calendar(hb, s, m);
       if (goal) {
         var gst = gstats(goal);
-        out += '<a class="row-card" href="#/goals/g/' + esc(goal.id) + '"><span class="g-ic">' + icon('target', 20) + '</span><div style="flex:1;min-width:0"><div class="s">Counts toward</div><div class="t">' + esc(goal.name) + ' · ' + esc(L.progressText(gst.total, gst.target, goal.unit)) + '</div></div>' + icon('chevron', 20) + '</a>';
+        out += '<a class="row-card" href="#/goals/g/' + esc(goal.id) + '"><span class="g-ic">' + icon('target', 20) + '</span><div style="flex:1;min-width:0"><div class="s">Counts toward</div><div class="t">' + esc(goal.name) + ' · ' + esc(L.goalProgressText(gst)) + '</div></div>' + icon('chevron', 20) + '</a>';
       }
       var ha = settings().ha;
       out += '<div class="toggle-row g-panel"><label for="g-remind" style="flex:1"><span class="t">Evening reminder</span><span class="s">' +
@@ -392,9 +395,14 @@
       var sub = g.due ? 'Goal · by ' + h.fmt(g.due) + (g.status === 'active' ? ' · ' + (s.daysLeft >= 0 ? h.plural(s.daysLeft, 'day') + ' left' : h.plural(-s.daysLeft, 'day') + ' past the deadline') : '') : 'Goal · no deadline';
       out += '<div><h1 class="small">' + esc(g.name) + '</h1><p class="settings-help" style="margin-top:4px">' + esc(sub) + '</p></div>';
       var perWeek = s.perDay * 7;
-      out += '<div class="stats"><div class="stat"><b>' + esc(g.unit === '$' ? amt(s.total, '$') : s.total + ' / ' + s.target) + '</b><span>' + esc(g.unit === '$' ? 'of ' + amt(s.target, '$') : (g.unit || 'done')) + '</span></div>' +
+      var first = g.measure === 'value'
+        ? '<div class="stat"><b>' + esc(amt(s.total, g.unit)) + '</b><span>' + esc('Now · goal ' + amt(s.target, g.unit)) + '</span></div>'
+        : '<div class="stat"><b>' + esc(g.unit === '$' ? amt(s.total, '$') : s.total + ' / ' + s.target) + '</b><span>' + esc(g.unit === '$' ? 'of ' + amt(s.target, '$') : (g.unit || 'done')) + '</span></div>';
+      var weekly = Math.abs(perWeek) >= 10 ? Math.round(perWeek) : Math.round(perWeek * 10) / 10;
+      out += '<div class="stats">' + first +
         '<div class="stat"><b>' + esc(s.status === 'reached' || g.status !== 'active' ? s.pct + '%' : s.projected ? h.fmt(s.projected) : '–') + '</b><span>' + (s.status === 'reached' || g.status !== 'active' ? 'Of target' : 'Projected finish') + '</span></div>' +
-        '<div class="stat"><b>' + esc(perWeek >= 10 ? amt(Math.round(perWeek), g.unit === '$' ? '$' : '') : String(Math.round(perWeek * 10) / 10)) + '</b><span>Per week, avg</span></div></div>';
+        '<div class="stat"><b>' + esc(s.early ? '–' : (g.measure === 'value' && weekly > 0 ? '+' : '') + (g.unit === '$' ? amt(weekly, '$') : String(weekly))) + '</b><span>' + (g.measure === 'value' ? 'Change per week' : 'Per week, avg') + '</span></div></div>';
+      if (g.measure === 'value' && g.status === 'active') out += '<p class="settings-help">' + esc(L.goalProgressText(s)) + ' since ' + esc(h.fmt(g.started)) + ' (started at ' + esc(amt(s.startValue, g.unit)) + ').</p>';
 
       if (s.status === 'reached' && g.status === 'active') {
         out += '<div class="hint good">' + icon('check', 18) + '<span style="flex:1">You reached the target.</span><button class="linkish" data-action="g-goal-status" data-id="' + esc(id) + '" data-v="achieved">Mark achieved</button></div>';
@@ -408,12 +416,14 @@
         out += gs.view === 'pace' ? paceChart(g, s) : milestones(g, s);
       }
 
-      if (g.measure === 'number') {
-        if (g.status === 'active') out += '<button class="btn" style="flex:none" data-action="g-log" data-id="' + esc(id) + '">' + icon('plus', 18, 2.6) + 'Log progress</button>';
+      if (g.measure === 'number' || g.measure === 'value') {
+        var isVal = g.measure === 'value';
+        var sign = function (n) { return isVal ? '' : n > 0 ? '+' : ''; };
+        if (g.status === 'active') out += '<button class="btn" style="flex:none" data-action="g-log" data-id="' + esc(id) + '">' + icon('plus', 18, 2.6) + (isVal ? 'Log a reading' : 'Log progress') + '</button>';
         var entries = gs.data.progress.filter(function (p) { return p.goalId === id; }).sort(function (a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : 0; });
         if (entries.length) {
-          out += '<div class="section-label">Progress</div><div class="result-list">' + entries.slice(0, 30).map(function (p) {
-            return '<button class="result-row g-entry" data-action="g-del-entry" data-id="' + esc(p.id) + '" aria-label="' + esc((p.amount > 0 ? '+' : '') + amt(p.amount, g.unit) + ' on ' + h.fmt(p.date) + '. Tap to delete.') + '"><span class="rl-body"><span class="rl-row"><span class="t">' + esc((p.amount > 0 ? '+' : '') + amt(p.amount, g.unit)) + '</span><span class="s">' + esc(h.fmt(p.date)) + '</span></span>' +
+          out += '<div class="section-label">' + (isVal ? 'Readings' : 'Progress') + '</div><div class="result-list">' + entries.slice(0, 30).map(function (p) {
+            return '<button class="result-row g-entry" data-action="g-del-entry" data-id="' + esc(p.id) + '" aria-label="' + esc(sign(p.amount) + amt(p.amount, g.unit) + ' on ' + h.fmt(p.date) + '. Tap to delete.') + '"><span class="rl-body"><span class="rl-row"><span class="t">' + esc(sign(p.amount) + amt(p.amount, g.unit)) + '</span><span class="s">' + esc(h.fmt(p.date)) + '</span></span>' +
               (p.note ? '<span class="s">' + esc(p.note) + '</span>' : '') + '</span></button>';
           }).join('') + '</div>';
         }
@@ -449,15 +459,24 @@
     function paceChart(g, s) {
       var t = h.today(), start = g.started, end = g.due && g.due > start ? g.due : t;
       if (end < t) end = t;
-      var span = Math.max(1, h.days(start, end)), top = Math.max(s.target, s.total) || 1;
+      var span = Math.max(1, h.days(start, end)), isValue = g.measure === 'value', from = isValue ? s.startValue : 0;
+      // y range: 0 → target for amounts; around start, target and readings for reach-a-number goals
+      var vals = [from, s.target, s.total].concat(s.series.map(function (p) { return p.total; }));
+      var lo = isValue ? Math.min.apply(null, vals) : 0, hi = Math.max.apply(null, vals);
+      if (isValue) { var padY = Math.max((hi - lo) * 0.08, 0.5); lo = Math.floor(lo - padY); hi = Math.ceil(hi + padY); }
+      if (hi <= lo) hi = lo + 1;
       var X0 = 34, X1 = 336, Y0 = 170, Y1 = 12;
       var x = function (iso) { return X0 + (X1 - X0) * Math.min(1, Math.max(0, h.days(start, iso) / span)); };
-      var y = function (v) { return Y0 - (Y0 - Y1) * Math.min(1, v / top); };
-      var pts = [[x(start), y(0)]], prev = 0;
-      s.series.forEach(function (p) { if (p.date < start) return; pts.push([x(p.date), y(prev)]); pts.push([x(p.date), y(p.total)]); prev = p.total; });
+      var y = function (v) { return Y0 - (Y0 - Y1) * Math.min(1, Math.max(0, (v - lo) / (hi - lo))); };
+      var pts = [[x(start), y(from)]], prev = from;
+      s.series.forEach(function (p) {
+        if (p.date < start) return;
+        if (!isValue) pts.push([x(p.date), y(prev)]); // amounts step up; readings connect directly
+        pts.push([x(p.date), y(p.total)]); prev = p.total;
+      });
       pts.push([x(g.status === 'active' ? t : (g.finished || t)), y(prev)]);
       var line = pts.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' ');
-      var plan = g.due ? '<polyline points="' + x(start).toFixed(1) + ',' + y(0).toFixed(1) + ' ' + x(g.due).toFixed(1) + ',' + y(s.target).toFixed(1) + '" fill="none" stroke="#9AA3B5" stroke-width="2" stroke-dasharray="5 5"/>' : '';
+      var plan = g.due ? '<polyline points="' + x(start).toFixed(1) + ',' + y(from).toFixed(1) + ' ' + x(g.due).toFixed(1) + ',' + y(s.target).toFixed(1) + '" fill="none" stroke="#9AA3B5" stroke-width="2" stroke-dasharray="5 5"/>' : '';
       var proj = '';
       if (s.projected && g.status === 'active') {
         var px, pv;
@@ -465,11 +484,11 @@
         proj = '<polyline points="' + x(t).toFixed(1) + ',' + y(s.total).toFixed(1) + ' ' + px.toFixed(1) + ',' + y(pv).toFixed(1) + '" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-dasharray="2 5" stroke-linecap="round"/>';
       }
       var mid = h.addDays(start, Math.round(span / 2));
-      var label = 'Progress from ' + h.fmt(start) + ': ' + amt(s.total, g.unit) + ' of ' + amt(s.target, g.unit) + (s.plan != null ? ', plan says ' + amt(Math.round(s.plan * 10) / 10, g.unit) + ' by today' : '') + '.';
-      var text = s.projected ? 'At your pace you reach ' + amt(s.target, g.unit) + ' on ' + h.fmt(s.projected, true) + (g.due ? (s.projected <= g.due ? ', ' + h.plural(h.days(s.projected, g.due), 'day') + ' before the deadline.' : ', ' + h.plural(h.days(g.due, s.projected), 'day') + ' after the deadline.') : '.') : s.total >= s.target ? 'Target reached.' : 'Log some progress to see your pace.';
+      var label = 'Progress from ' + h.fmt(start) + ': ' + L.goalProgressText(s) + (s.plan != null ? ', plan says ' + amt(Math.round(s.plan * 10) / 10, g.unit) + ' by today' : '') + '.';
+      var text = s.projected ? 'At your pace you reach ' + amt(s.target, g.unit) + ' on ' + h.fmt(s.projected, true) + (g.due ? (s.projected <= g.due ? ', ' + h.plural(h.days(s.projected, g.due), 'day') + ' before the deadline.' : ', ' + h.plural(h.days(g.due, s.projected), 'day') + ' after the deadline.') : '.') : s.status === 'reached' ? 'Target reached.' : isValue ? 'Log a few readings to see your pace.' : 'Log some progress to see your pace.';
       return '<section class="g-pace"><svg role="img" aria-label="' + esc(label) + '" viewBox="0 0 340 200" width="100%">' +
         '<line x1="' + X0 + '" y1="' + Y1 + '" x2="' + X1 + '" y2="' + Y1 + '" stroke="#EEF1F5"/><line x1="' + X0 + '" y1="' + ((Y0 + Y1) / 2) + '" x2="' + X1 + '" y2="' + ((Y0 + Y1) / 2) + '" stroke="#EEF1F5"/><line x1="' + X0 + '" y1="' + Y0 + '" x2="' + X1 + '" y2="' + Y0 + '" stroke="#DDE1E8"/>' +
-        '<text x="0" y="' + (Y1 + 4) + '" class="g-axis">' + esc(shortNum(top)) + '</text><text x="0" y="' + ((Y0 + Y1) / 2 + 4) + '" class="g-axis">' + esc(shortNum(top / 2)) + '</text><text x="0" y="' + (Y0 + 4) + '" class="g-axis">0</text>' +
+        '<text x="0" y="' + (Y1 + 4) + '" class="g-axis">' + esc(shortNum(hi)) + '</text><text x="0" y="' + ((Y0 + Y1) / 2 + 4) + '" class="g-axis">' + esc(shortNum((hi + lo) / 2)) + '</text><text x="0" y="' + (Y0 + 4) + '" class="g-axis">' + esc(shortNum(lo)) + '</text>' +
         plan + proj + '<polyline points="' + line + '" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>' +
         '<circle cx="' + x(g.status === 'active' ? t : (g.finished || t)).toFixed(1) + '" cy="' + y(s.total).toFixed(1) + '" r="6" fill="#fff" stroke="var(--accent)" stroke-width="3"/>' +
         '<text x="' + X0 + '" y="194" class="g-axis">' + esc(h.fmt(start)) + '</text><text x="' + ((X0 + X1) / 2) + '" y="194" class="g-axis" text-anchor="middle">' + esc(h.fmt(mid)) + '</text><text x="' + X1 + '" y="194" class="g-axis" text-anchor="end">' + esc(h.fmt(end)) + '</text></svg>' +
@@ -512,8 +531,8 @@
           : { name: '', schedule: 'daily', times: 3, days: [1, 3, 5], skips: 1, goalId: '', reminder: true });
       } else if (kind === 'goal') {
         var g = editId ? goalById(editId) : null;
-        Object.assign(f, g ? { name: g.name, measure: g.measure, target: String(g.target), unit: g.unit, started: g.started, due: g.due || '', habits: gs.data.habits.filter(function (x) { return x.goalId === g.id; }).map(function (x) { return x.id; }) }
-          : { name: '', measure: 'number', target: '', unit: '', started: h.today(), due: '', habits: [] });
+        Object.assign(f, g ? { name: g.name, measure: g.measure, target: String(g.target), startValue: g.measure === 'value' ? String(g.startValue) : '', unit: g.unit, started: g.started, due: g.due || '', habits: gs.data.habits.filter(function (x) { return x.goalId === g.id; }).map(function (x) { return x.id; }) }
+          : { name: '', measure: 'number', target: '', startValue: '', unit: '', started: h.today(), due: '', habits: [] });
       } else if (kind === 'progress') {
         Object.assign(f, { goalId: editId, amount: '', date: h.today(), note: '' });
       }
@@ -567,18 +586,32 @@
       var out = '<div class="field"><label for="g-name">Goal</label><input class="input" id="g-name" name="name" autocomplete="off" placeholder="e.g. Save $10k for a car" value="' + esc(f.name) + '"></div>';
       if (!f.editId) {
         out += '<div class="field"><span class="label" id="g-measure">Track it by</span><div class="chips" role="group" aria-labelledby="g-measure">' +
-          chip('g-f-measure', 'number', f.measure === 'number', 'Logging progress') + chip('g-f-measure', 'checkins', f.measure === 'checkins', 'Counting habit check-ins') + '</div></div>';
+          chip('g-f-measure', 'number', f.measure === 'number', 'Adding up amounts') + chip('g-f-measure', 'value', f.measure === 'value', 'Reaching a number') +
+          chip('g-f-measure', 'checkins', f.measure === 'checkins', 'Counting habit check-ins') + '</div>' +
+          '<span class="field-note">' + esc({ number: 'Each entry adds to the total, like $500 saved or 1 book read.', value: 'Log readings as you go, like your weight, and move from where you are now to your goal.', checkins: 'Each check-in of a linked habit counts as 1.' }[f.measure]) + '</span></div>';
       }
-      out += '<div class="g-two"><div class="field"><label for="g-target">Target</label><input class="input" id="g-target" name="target" inputmode="decimal" autocomplete="off" placeholder="' + (f.measure === 'checkins' ? '50' : '10000') + '" value="' + esc(f.target) + '"></div>' +
-        '<div class="field"><label for="g-unit">Unit <span class="opt">(optional)</span></label><input class="input" id="g-unit" name="unit" autocomplete="off" placeholder="' + (f.measure === 'checkins' ? 'times' : '$, books, km') + '" value="' + esc(f.unit) + '"></div></div>';
+      if (f.measure === 'value') {
+        out += '<div class="g-two"><div class="field"><label for="g-startv">Now</label><input class="input" id="g-startv" name="startValue" inputmode="decimal" autocomplete="off" placeholder="200" value="' + esc(f.startValue) + '"></div>' +
+          '<div class="field"><label for="g-target">Goal</label><input class="input" id="g-target" name="target" inputmode="decimal" autocomplete="off" placeholder="180" value="' + esc(f.target) + '"></div></div>' +
+          '<div class="field"><label for="g-unit">Unit <span class="opt">(optional)</span></label><input class="input" id="g-unit" name="unit" autocomplete="off" placeholder="lbs, kg, minutes" value="' + esc(f.unit) + '"></div>';
+      } else {
+        out += '<div class="g-two"><div class="field"><label for="g-target">Target</label><input class="input" id="g-target" name="target" inputmode="decimal" autocomplete="off" placeholder="' + (f.measure === 'checkins' ? '50' : '10000') + '" value="' + esc(f.target) + '"></div>' +
+          '<div class="field"><label for="g-unit">Unit <span class="opt">(optional)</span></label><input class="input" id="g-unit" name="unit" autocomplete="off" placeholder="' + (f.measure === 'checkins' ? 'times' : '$, books, km') + '" value="' + esc(f.unit) + '"></div></div>';
+      }
       out += '<div class="g-two">' + (f.editId ? '' : '<div class="field"><label for="g-start">Start</label><input class="input" type="date" id="g-start" name="started" value="' + esc(f.started) + '" max="' + h.today() + '"></div>') +
         '<div class="field"><label for="g-due">Deadline <span class="opt">(optional)</span></label><input class="input" type="date" id="g-due" name="due" value="' + esc(f.due) + '"></div></div>';
-      var target = parseFloat(String(f.target).replace(/[,$€£₹\s]/g, ''));
-      var ms = L.evenMilestones(target, f.editId ? goalById(f.editId).started : f.started, f.due);
+      var draft = { measure: f.measure, target: parseFloat(String(f.target).replace(/[,$€£₹\s]/g, '')), startValue: parseFloat(String(f.startValue).replace(/[,$€£₹\s]/g, '')),
+        unit: (f.unit || '').trim(), started: f.editId ? goalById(f.editId).started : f.started, due: f.due };
+      var ms = f.measure === 'value' && !isFinite(draft.startValue) ? [] : L.goalMilestones(draft);
+      var pace = f.measure === 'checkins' || (f.measure === 'value' && !isFinite(draft.startValue)) ? null : L.goalPace(draft, function (x) { return h.fmt(x, true); });
       if (ms.length) {
         out += '<div class="field"><span class="label">Milestones</span><div class="result-list">' + ms.map(function (m) {
           return '<div class="result-row" style="padding:11px 14px"><span class="rl-body"><span class="rl-row"><span class="t" style="font-size:14px">' + esc(amt(m.value, f.unit)) + '</span><span class="s">by ' + esc(h.fmt(m.due, true)) + '</span></span></span></div>';
         }).join('') + '</div><span class="field-note">Split evenly. You can change them in the Goals tab of your Sheet.</span></div>';
+      }
+      if (pace) {
+        out += '<div class="hint' + (pace.warn ? ' warn' : '') + '" role="' + (pace.warn ? 'alert' : 'status') + '" style="align-items:flex-start">' + icon('clock', 18) + '<span style="flex:1">' + esc(pace.text) +
+          (pace.suggestedDue ? ' <button type="button" class="linkish" style="margin:0;font-size:13px" data-action="g-f-due" data-v="' + pace.suggestedDue + '">Use ' + esc(h.fmt(pace.suggestedDue, true)) + '</button>' : '') + '</span></div>';
       }
       if (f.measure === 'checkins') {
         var habits = gs.data.habits.filter(function (x) { return x.status !== 'archived'; });
@@ -593,11 +626,15 @@
     function progressSheet(f) {
       var g = goalById(f.goalId);
       if (!g) return '';
+      var isVal = g.measure === 'value', cur = isVal ? gstats(g).total : null;
       return '<div class="scrim" data-action="scrim"><form class="sheet" id="g-progress-form" role="dialog" aria-modal="true" aria-labelledby="g-title" novalidate>' +
-        '<div class="grab" aria-hidden="true"></div><div class="top"><div><div class="eyebrow">' + esc(g.name) + '</div><h1 class="small" id="g-title" style="font-size:24px">Log progress</h1></div>' +
+        '<div class="grab" aria-hidden="true"></div><div class="top"><div><div class="eyebrow">' + esc(g.name) + '</div><h1 class="small" id="g-title" style="font-size:24px">' + (isVal ? 'Log a reading' : 'Log progress') + '</h1></div>' +
         '<button type="button" class="icon-btn soft" data-action="close-sheet" aria-label="Close">' + icon('close', 18, 2.4) + '</button></div>' +
-        '<div class="field"><label for="g-amount">How much' + (g.unit ? ' (' + esc(g.unit) + ')' : '') + '?</label><input class="input" id="g-amount" name="amount" inputmode="decimal" autocomplete="off" placeholder="e.g. ' + (g.unit === '$' ? '500' : '1') + '" value="' + esc(f.amount) + '">' +
-        '<span class="field-note">Adds to your total. Use a minus to correct, like -200.</span></div>' +
+        (isVal
+          ? '<div class="field"><label for="g-amount">Reading' + (g.unit ? ' (' + esc(g.unit) + ')' : '') + '</label><input class="input" id="g-amount" name="amount" inputmode="decimal" autocomplete="off" placeholder="e.g. ' + esc(String(cur)) + '" value="' + esc(f.amount) + '">' +
+            '<span class="field-note">Where you are now, like what the scale says. Last: ' + esc(amt(cur, g.unit)) + '. Goal: ' + esc(amt(g.target, g.unit)) + '.</span></div>'
+          : '<div class="field"><label for="g-amount">How much' + (g.unit ? ' (' + esc(g.unit) + ')' : '') + '?</label><input class="input" id="g-amount" name="amount" inputmode="decimal" autocomplete="off" placeholder="e.g. ' + (g.unit === '$' ? '500' : '1') + '" value="' + esc(f.amount) + '">' +
+            '<span class="field-note">Adds to your total. Use a minus to correct, like -200.</span></div>') +
         h.dateField('g-date', f.date) +
         '<div class="field"><label for="g-note">Note <span class="opt">(optional)</span></label><input class="input" id="g-note" name="note" autocomplete="off" value="' + esc(f.note) + '"></div>' +
         '<p class="error-text" id="g-err" role="alert"></p><button class="btn" type="submit" style="flex:none">Save</button></form></div>';
@@ -605,7 +642,7 @@
     function readForm() {
       var f = h.sheet(), el = document.getElementById('g-form') || document.getElementById('g-progress-form');
       if (!f || f.addon !== 'goals' || !el) return f;
-      ['name', 'target', 'unit', 'started', 'due', 'amount', 'date', 'note'].forEach(function (k) { if (el.elements[k]) f[k] = el.elements[k].value; });
+      ['name', 'target', 'startValue', 'unit', 'started', 'due', 'amount', 'date', 'note'].forEach(function (k) { if (el.elements[k]) f[k] = el.elements[k].value; });
       if (el.elements.reminder) f.reminder = el.elements.reminder.checked;
       return f;
     }
@@ -616,13 +653,13 @@
       function fail(msg, field) { err.textContent = msg; if (field && form.elements[field]) form.elements[field].focus(); return true; }
       if (form.id === 'g-progress-form') {
         var a = parseFloat(String(f.amount).replace(/[,$€£₹\s]/g, ''));
-        if (!isFinite(a) || !a) return fail('Enter an amount, like 500.', 'amount');
-        if (!h.validIso(f.date)) return fail('Pick a date.', 'date');
         var g0 = goalById(f.goalId);
+        if (g0.measure === 'value' ? !isFinite(a) || String(f.amount).trim() === '' : !isFinite(a) || !a) return fail(g0.measure === 'value' ? 'Enter the reading, like 196.4.' : 'Enter an amount, like 500.', 'amount');
+        if (!h.validIso(f.date)) return fail('Pick a date.', 'date');
         mutate({ action: 'addProgress', id: h.uid('P'), goalId: f.goalId, amount: a, date: f.date, note: (f.note || '').trim() });
         h.closeSheet();
         var s0 = gstats(g0);
-        h.toast('Logged · ' + L.progressText(s0.total, s0.target, g0.unit));
+        h.toast('Logged · ' + L.goalProgressText(s0));
         return true;
       }
       var name = (f.name || '').trim();
@@ -638,14 +675,20 @@
       }
       var target = parseFloat(String(f.target).replace(/[,$€£₹\s]/g, ''));
       if (!name) return fail('Give the goal a name.', 'name');
-      if (!(target > 0)) return fail('Enter a target, like 10000.', 'target');
+      var startValue = parseFloat(String(f.startValue).replace(/[,$€£₹\s]/g, ''));
+      if (f.measure === 'value') {
+        if (!isFinite(startValue)) return fail('Enter where you are now, like 200.', 'startValue');
+        if (!isFinite(target)) return fail('Enter your goal, like 180.', 'target');
+        if (target === startValue) return fail('Your goal must be different from where you are now.', 'target');
+      } else if (!(target > 0)) return fail('Enter a target, like 10000.', 'target');
       var startD = f.editId ? goalById(f.editId).started : f.started;
       if (!h.validIso(startD)) return fail('Pick a start date.', 'started');
       if (f.due && (!h.validIso(f.due) || f.due <= startD)) return fail('The deadline must be after the start.', 'due');
       var unit = (f.unit || '').trim() || (f.measure === 'checkins' ? 'times' : '');
       var id = f.editId || h.uid('G');
-      if (f.editId) mutate({ action: 'updateGoal', id: id, name: name, target: target, unit: unit, due: f.due || '' });
-      else mutate({ action: 'addGoal', id: id, name: name, measure: f.measure, target: target, unit: unit, started: startD, due: f.due || '' });
+      var vals = f.measure === 'value' ? { startValue: startValue } : {};
+      if (f.editId) mutate(Object.assign({ action: 'updateGoal', id: id, name: name, target: target, unit: unit, due: f.due || '' }, vals));
+      else mutate(Object.assign({ action: 'addGoal', id: id, name: name, measure: f.measure, target: target, unit: unit, started: startD, due: f.due || '' }, vals));
       if (f.measure === 'checkins') {
         gs.data.habits.forEach(function (x) {
           var want = f.habits.indexOf(x.id) >= 0;
@@ -669,6 +712,7 @@
       'g-f-skips': function (el) { reform(function (f) { f.skips = +el.dataset.v; }); },
       'g-f-goal': function (el) { reform(function (f) { f.goalId = el.dataset.v; }); },
       'g-f-measure': function (el) { reform(function (f) { f.measure = el.dataset.v; }); },
+      'g-f-due': function (el) { reform(function (f) { f.due = el.dataset.v; }); },
       'g-f-habit': function (el) { reform(function (f) { var i = f.habits.indexOf(el.dataset.v); if (i >= 0) f.habits.splice(i, 1); else f.habits.push(el.dataset.v); }); },
       'g-check': function (el) {
         var hb = habitById(el.dataset.id), s = stats(hb), t = h.today();
@@ -751,10 +795,10 @@
     function onInput(t) {
       if (t.form && (t.form.id === 'g-form' || t.form.id === 'g-progress-form')) {
         readForm();
-        if (t.id === 'g-target' || t.id === 'g-due' || t.id === 'g-start' || t.id === 'g-unit') {
+        if (t.id === 'g-target' || t.id === 'g-startv' || t.id === 'g-due' || t.id === 'g-start' || t.id === 'g-unit') {
           // milestone preview depends on these; redraw the sheet (focus is kept)
           clearTimeout(onInput.timer);
-          onInput.timer = setTimeout(function () { h.renderSheet(); }, 250);
+          onInput.timer = setTimeout(function () { readForm(); h.renderSheet(); }, 250);
         }
         if (t.id === 'g-date') document.querySelectorAll('[data-action="set-date"][data-for="g-date"]').forEach(function (c) { c.setAttribute('aria-pressed', String(c.dataset.v === t.value)); });
       }

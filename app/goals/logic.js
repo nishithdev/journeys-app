@@ -120,29 +120,35 @@
   }
 
   // ---------- goals ----------
-  // goal: { id, name, measure: 'number'|'checkins', target, unit, started, due, milestones: [{value, due}], status: 'active'|'achieved'|'abandoned', finished }
-  // progress: [{ goalId, date, amount }]
-  function evenMilestones(target, started, due, count) {
-    if (!(target > 0) || !validIso(started) || !validIso(due) || due <= started) return [];
+  // goal: { id, name, measure, target, unit, started, due, milestones: [{value, due}], status: 'active'|'achieved'|'abandoned', finished, startValue }
+  //   measure 'number'   → you log amounts that add up (+500 saved, +1 book)
+  //   measure 'checkins' → counts done check-ins of the habits linked to it
+  //   measure 'value'    → you log readings and move from startValue to target, up or down (weight 200 → 180)
+  // progress: [{ goalId, date, amount }]  (for 'value' goals, amount is the reading)
+  function roundStep(v, span) { return Math.abs(span) >= 20 ? Math.round(v) : Math.round(v * 10) / 10; }
+  function evenMilestones(target, started, due, count, from) {
+    var f = from == null || from === '' ? 0 : Number(from), t = Number(target);
+    if (!isFinite(t) || !isFinite(f) || t === f || (from == null && !(t > 0))) return [];
+    if (!validIso(started) || !validIso(due) || due <= started) return [];
     var n = count || 4, span = days(started, due), out = [];
-    for (var i = 1; i <= n; i++) {
-      var v = target * i / n;
-      v = target >= 20 ? Math.round(v) : Math.round(v * 10) / 10;
-      out.push({ value: v, due: addDays(started, Math.round(span * i / n)) });
-    }
+    for (var i = 1; i <= n; i++) out.push({ value: i === n ? t : roundStep(f + (t - f) * i / n, t - f), due: addDays(started, Math.round(span * i / n)) });
     return out;
+  }
+  function goalMilestones(g) {
+    return evenMilestones(g.target, g.started, g.due, 4, g.measure === 'value' ? g.startValue : null);
   }
   function parseMilestones(text) {
     return String(text || '').split(/[;\n]+/).map(function (part) {
-      var m = /^\s*([\d.,]+)\s*@\s*(\d{4}-\d{2}-\d{2})\s*$/.exec(part);
+      var m = /^\s*(-?[\d.,]+)\s*@\s*(\d{4}-\d{2}-\d{2})\s*$/.exec(part);
       return m ? { value: Number(m[1].replace(/,/g, '')), due: m[2] } : null;
     }).filter(function (x) { return x && isFinite(x.value) && validIso(x.due); })
-      .sort(function (a, b) { return a.value - b.value; });
+      .sort(function (a, b) { return a.due < b.due ? -1 : a.due > b.due ? 1 : 0; });
   }
   function formatMilestones(list) { return (list || []).map(function (m) { return m.value + '@' + m.due; }).join('; '); }
 
   function goalStats(g, progress, checkins, habits, today, stallDays) {
     var end = g.status !== 'active' && validIso(g.finished) ? g.finished : today;
+    var isValue = g.measure === 'value';
     var events = [];
     if (g.measure === 'checkins') {
       var linked = (habits || []).filter(function (h) { return h.goalId === g.id; }).map(function (h) { return h.id; });
@@ -150,48 +156,77 @@
         if (linked.indexOf(c.habitId) >= 0 && c.result !== 'skip' && validIso(c.date) && c.date >= g.started && c.date <= end) events.push({ date: c.date, amount: 1 });
       });
     } else {
-      (progress || []).forEach(function (p) { if (p.goalId === g.id && validIso(p.date)) events.push({ date: p.date, amount: Number(p.amount) || 0 }); });
+      (progress || []).forEach(function (p, i) { if (p.goalId === g.id && validIso(p.date)) events.push({ date: p.date, amount: Number(p.amount) || 0, i: i }); });
     }
-    events.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
-    var total = 0, series = [];
+    events.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : (a.i || 0) - (b.i || 0); });
+    var target = Number(g.target) || 0;
+    var from = isValue ? (Number(g.startValue) || 0) : 0;
+    var span = target - from, down = span < 0;
+    // series: the value after each day with progress (a running total, or the latest reading)
+    var total = from, series = [];
     events.forEach(function (e) {
-      total += e.amount;
+      total = isValue ? e.amount : total + e.amount;
       if (series.length && series[series.length - 1].date === e.date) series[series.length - 1].total = total;
       else series.push({ date: e.date, total: total });
     });
     total = Math.round(total * 100) / 100;
-    var target = Number(g.target) || 0;
-    var ms = (g.milestones && g.milestones.length ? g.milestones : evenMilestones(target, g.started, g.due)).map(function (m) {
+    var crossed = function (v, m) { return down ? v <= m : v >= m; };
+    var ms = (g.milestones && g.milestones.length ? g.milestones : goalMilestones(g)).map(function (m) {
       var hit = null;
-      for (var i = 0; i < series.length; i++) if (series[i].total >= m.value) { hit = series[i].date; break; }
+      for (var i = 0; i < series.length; i++) if (crossed(series[i].total, m.value)) { hit = series[i].date; break; }
       return { value: m.value, due: m.due, hit: hit, early: hit ? days(hit, m.due) : null, overdue: !hit && m.due < today };
     });
+    var frac = span ? Math.min(1, Math.max(0, (total - from) / span)) : 0;
     var elapsed = Math.max(1, days(g.started, end));
-    var rate = total / elapsed; // per day
-    var reached = target > 0 && total >= target;
-    var projected = !reached && rate > 0 && g.status === 'active' ? addDays(today, Math.ceil((target - total) / rate)) : null;
-    var plan = null;
-    if (validIso(g.due) && g.due > g.started) plan = target * Math.min(1, Math.max(0, days(g.started, today) / days(g.started, g.due)));
+    var rate = (total - from) / elapsed; // change per day (negative when going down)
+    var reached = span !== 0 && crossed(total, target);
+    var early = days(g.started, end) < 7; // too soon to judge pace from a few days of data
+    var projected = !reached && !early && g.status === 'active' && rate * span > 0 ? addDays(today, Math.ceil((target - total) / rate)) : null;
+    var planFrac = null;
+    if (validIso(g.due) && g.due > g.started) planFrac = Math.min(1, Math.max(0, days(g.started, today) / days(g.started, g.due)));
     var last = series.length ? series[series.length - 1].date : null;
     var quiet = days(last && last > g.started ? last : g.started, today);
     var status;
     if (g.status === 'achieved' || g.status === 'abandoned') status = g.status;
     else if (reached) status = 'reached';
     else if (stallDays && quiet >= stallDays) status = 'stalled';
-    else if (plan == null) status = 'active';
-    else if (total >= plan + target * 0.05) status = 'ahead';
-    else if (total <= plan - target * 0.05) status = 'behind';
+    else if (planFrac == null || early) status = 'active';
+    else if (frac >= planFrac + 0.05) status = 'ahead';
+    else if (frac <= planFrac - 0.05) status = 'behind';
     else status = 'on track';
     var next = null;
     for (var k = 0; k < ms.length; k++) if (!ms[k].hit) { next = ms[k]; break; }
     return {
-      id: g.id, name: g.name, total: total, target: target, unit: g.unit || '',
-      pct: target > 0 ? Math.min(100, Math.round(total / target * 100)) : 0,
-      status: status, plan: plan == null ? null : Math.round(plan * 100) / 100,
+      id: g.id, name: g.name, measure: g.measure || 'number', total: total, target: target, unit: g.unit || '',
+      startValue: isValue ? from : null, change: Math.round((total - from) * 100) / 100, down: down,
+      pct: Math.round(frac * 100),
+      status: status, plan: planFrac == null ? null : roundStep(from + span * planFrac, span),
       projected: projected, daysLeft: validIso(g.due) ? days(today, g.due) : null,
-      lastProgress: last, quietDays: quiet, perDay: rate,
+      lastProgress: last, quietDays: quiet, perDay: rate, early: early,
       milestones: ms, next: next, series: series
     };
+  }
+
+  // How fast a goal asks you to go, and a caution when a weight goal is faster than is usually sustainable.
+  var WEIGHT = [{ re: /^(lb|lbs|pound|pounds)$/i, max: 2, word: '1–2 lbs' }, { re: /^(kg|kgs|kilo|kilos|kilogram|kilograms)$/i, max: 1, word: '0.5–1 kg' }];
+  function goalPace(g, fmtDate) {
+    var fd = fmtDate || function (x) { return x; };
+    if (!validIso(g.started) || !validIso(g.due) || g.due <= g.started) return null;
+    var amount = g.measure === 'value' ? Math.abs((Number(g.target) || 0) - (Number(g.startValue) || 0)) : Number(g.target) || 0;
+    if (!(amount > 0)) return null;
+    var weeks = days(g.started, g.due) / 7, perWeek = amount / weeks;
+    var unit = String(g.unit || '').trim(), w = null;
+    WEIGHT.forEach(function (x) { if (x.re.test(unit)) w = x; });
+    var r = Math.round(perWeek * (perWeek < 10 ? 10 : 1)) / (perWeek < 10 ? 10 : 1);
+    var res = { perWeek: perWeek, text: 'That\'s about ' + formatAmount(r, unit) + ' a week.', warn: false };
+    if (w && perWeek > w.max) {
+      var weeksNeeded = Math.ceil(amount / w.max);
+      res.warn = true;
+      res.text = 'That\'s about ' + formatAmount(r, unit) + ' a week. ' + w.word + ' a week is usually considered a safe, sustainable pace, which would take about ' +
+        weeksNeeded + ' weeks (by ' + fd(addDays(g.started, weeksNeeded * 7)) + '). Consider a later deadline.';
+      res.suggestedDue = addDays(g.started, weeksNeeded * 7);
+    }
+    return res;
   }
 
   function formatAmount(n, unit) {
@@ -207,9 +242,15 @@
     var money = unit === '$' || unit === '€' || unit === '£' || unit === '₹';
     return money ? formatAmount(total, unit) + ' of ' + formatAmount(target, unit) : formatAmount(total, '') + ' of ' + formatAmount(target, unit);
   }
+  // Same, for any goal: "185 lbs now · down 15 of 20 lbs" for reach-a-number goals.
+  function goalProgressText(s) {
+    if (s.measure !== 'value') return progressText(s.total, s.target, s.unit);
+    var moved = s.down ? -s.change : s.change;
+    return formatAmount(s.total, s.unit) + ' now · ' + (s.down ? 'down ' : 'up ') + formatAmount(Math.max(0, Math.round(moved * 100) / 100), '') + ' of ' + formatAmount(Math.abs(s.target - s.startValue), s.unit);
+  }
 
   return {
-    progressText: progressText,
+    progressText: progressText, goalProgressText: goalProgressText, goalMilestones: goalMilestones, goalPace: goalPace,
     DAY_NAMES: DAY_NAMES, validIso: validIso, addDays: addDays, days: days, weekday: weekday, weekStart: weekStart,
     normDays: normDays, scheduled: scheduled, scheduleLabel: scheduleLabel, habitStats: habitStats,
     evenMilestones: evenMilestones, parseMilestones: parseMilestones, formatMilestones: formatMilestones,
