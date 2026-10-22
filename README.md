@@ -9,10 +9,12 @@ journeys-app/
 ├── app/                  ← the phone app (HTML, JS, CSS, icons)
 ├── server/server.js      ← serves the app + talks to Google Sheets (no npm packages)
 ├── server/mcp.js         ← MCP endpoint for AI assistants (/mcp)
+├── server/goals.js       ← add-on: Goals & habits (server side)
+├── app/goals/            ← add-on: Goals & habits (screens, styles, streak math)
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example          ← copy to .env: Sheet ID, time zone, optional token, Home Assistant
-├── homeassistant/        ← package (sensors + button handling) and a dashboard card
+├── homeassistant/        ← packages (sensors + button handling) and a dashboard card
 └── secrets/              ← put service-account.json here (git-ignored)
 ```
 
@@ -202,6 +204,21 @@ Leave out the two `--header` entries and `env` if you haven't set `APP_TOKEN`.
 
 If a web page needs to call `/mcp` from another origin, list it in `MCP_ALLOWED_ORIGINS` (comma-separated). Requests from other websites' pages are refused by default. Apps that don't run in a browser aren't affected.
 
+## 8. Goals & habits (add-on, optional)
+
+Habits you check off (every day, a number of times a week, or set days) with streaks, and goals with a target and deadline that are split into milestones. It's **off by default**. Turn it on in **Settings → Add-ons → Goals & habits**, or with `GOALS_ENABLED=true` in `.env`. The switch applies to every device. A **Goals** tab appears next to Journeys.
+
+- **Habits:** tap the circle on the **Today** screen to check one off, and tap again to undo. Each habit allows 0 to 3 skipped days a week, so one missed day doesn't break a long streak. On a habit's screen, tap any past day in the calendar to fill it in (done → skip → empty).
+- **Goals:** either you log progress (+500 toward savings, +1 book), or the goal counts check-ins of the habits linked to it (e.g. *Gym 50 times*). A goal shows whether you're **ahead**, **on track**, **behind** or **stalled**, its milestones (planned and actual dates), and a pace chart with your projected finish.
+- **Home Assistant:** at the check-in hour (default 21:00), each habit that isn't done yet gets a notification with **Done**, **Use a skip** and **In 1 hour** buttons. Goals with no progress for 14 days get a nudge at the daily check hour, at most once a week, with **Log progress** (type an amount) and **Not now**. For the buttons and the sensors, add `homeassistant/journeys-goals.yaml` the same way as `journeys.yaml` (step 6b). The file also has an example of checking a habit off from a sensor.
+- **AI assistants (MCP):** while it's on, `/mcp` also has `list_habits`, `check_in`, `add_habit`, `list_goals`, `add_goal`, `log_progress` and `update_goal`.
+- **In the Sheet:** four tabs are added the first time it's used: **Habits**, **Check-ins**, **Goals** and **Goal progress**, the last with a running total. Goal milestones are in the **Milestones** column as `2500@2026-12-31; 5000@2027-03-15`, and you can edit them there.
+- **Turning it off** hides the tab, the notifications and the MCP tools. Your data stays in the Sheet, and turning it back on brings it all back.
+
+Settings for the add-on: **Settings → Add-ons → Goals & habits settings**, or `CHECKIN_HOUR` (0–23, default 21) and `GOAL_STALL_DAYS` (default 14) in `.env`.
+
+**For developers:** the add-on is self-contained so it can be removed or split out later. Its code is `server/goals.js`, `app/goals/` and `homeassistant/journeys-goals.yaml`. The core only has small hooks: the `goalsAddon` lines in `server/server.js`, `extraTools` in `server/mcp.js`, and the add-on loader in `app/app.js` (`Journeys.register`). The streak and goal math in `app/goals/logic.js` is shared by the app and the server.
+
 ## Changing settings later
 
 Open the app, go to **Settings → Server settings**. From there you can change:
@@ -215,6 +232,8 @@ Open the app, go to **Settings → Server settings**. From there you can change:
 | Daily check hour | `NUDGE_HOUR` |
 | Nudge after (days) | `NUDGE_AFTER_DAYS` |
 | Ask again after (days) | `NUDGE_REPEAT_DAYS` |
+| Goals & habits on/off (Settings → Add-ons) | `GOALS_ENABLED` |
+| Goals & habits: check-in hour, stalled after | `CHECKIN_HOUR`, `GOAL_STALL_DAYS` |
 
 - **Changes apply right away** for every device, with no restart.
 - **When you switch Sheets,** the server first checks that the service account can open the new Sheet, and keeps the old one if it can't.

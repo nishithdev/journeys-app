@@ -18,6 +18,7 @@ const RPC = { PARSE: -32700, INVALID_REQUEST: -32600, METHOD_NOT_FOUND: -32601, 
 
 module.exports = function createMcp(x) {
   const { VERSION, ensureSetup, readAll, writeAll, apply, exclusive, stepsOf, history, journeyStatus, days, today, validIso, addDays, userError, AppError, sheetUrl } = x;
+  const extraTools = x.extraTools || (() => []); // tools from add-ons that are turned on
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
   // ---------- helpers ----------
@@ -310,7 +311,8 @@ module.exports = function createMcp(x) {
       }
     }
   ];
-  const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+  const allTools = () => tools.concat(extraTools({ parseDate }));
+  const findTool = (name) => allTools().find((t) => t.name === name);
 
   // Light argument check against the schema: required fields, types, enums, no unknown keys.
   function checkArgs(tool, args) {
@@ -324,13 +326,16 @@ module.exports = function createMcp(x) {
       if (v == null) continue;
       if (p.type === 'string' && typeof v !== 'string') return `"${k}" must be a string`;
       if (p.type === 'boolean' && typeof v !== 'boolean') return `"${k}" must be true or false`;
+      if (p.type === 'number' && (typeof v !== 'number' || !isFinite(v))) return `"${k}" must be a number`;
+      if (p.type === 'integer' && !Number.isInteger(v)) return `"${k}" must be a whole number`;
+      if ((p.type === 'number' || p.type === 'integer') && ((p.minimum != null && v < p.minimum) || (p.maximum != null && v > p.maximum))) return `"${k}" must be from ${p.minimum} to ${p.maximum}`;
       if (p.enum && !p.enum.includes(v)) return `"${k}" must be one of: ${p.enum.join(', ')}`;
     }
     return null;
   }
 
   async function callTool(params) {
-    const tool = byName[params && params.name];
+    const tool = findTool(params && params.name);
     if (!tool) { const e = new Error(`Unknown tool: ${params && params.name}`); e.code = RPC.INVALID_PARAMS; throw e; }
     const bad = checkArgs(tool, params.arguments);
     if (bad) return { content: [{ type: 'text', text: `Invalid arguments: ${bad}.` }], isError: true };
@@ -367,7 +372,7 @@ module.exports = function createMcp(x) {
           });
         }
         case 'ping': return ok({});
-        case 'tools/list': return ok({ tools: tools.map(({ run, ...t }) => t) });
+        case 'tools/list': return ok({ tools: allTools().map(({ run, ...t }) => t) });
         case 'tools/call': return ok(await callTool(params));
         case 'resources/list': return ok({ resources: [] });
         case 'prompts/list': return ok({ prompts: [] });
@@ -414,5 +419,5 @@ module.exports = function createMcp(x) {
     return out ? send(200, out) : send(202);
   }
 
-  return { handleHttp, tools };
+  return { handleHttp, tools, allTools };
 };

@@ -3,7 +3,7 @@
   'use strict';
 
   // ---------- constants ----------
-  var LS = { config: 'jt.config', data: 'jt.data', outbox: 'jt.outbox', demo: 'jt.demo', mode: 'jt.mode', recent: 'jt.recent' };
+  var LS = { config: 'jt.config', data: 'jt.data', outbox: 'jt.outbox', demo: 'jt.demo', mode: 'jt.mode', recent: 'jt.recent', addons: 'jt.addons', addonsDemo: 'jt.addons.demo' };
   var WAIT_WARN_DAYS = 7;
   var TYPES = [
     { id: 'Job', icon: 'briefcase', first: 'Applied', steps: ['Applied', 'Interview', 'Background check', 'Offer letter', 'Joined', 'Rejected'] },
@@ -204,6 +204,8 @@
       .then(function (h) {
         if (!h || !h.ok || h.app !== 'journeys') return; // unreachable, or just static files: keep the current mode
         state.server = h;
+        store(LS.addons, h.addons || []);
+        loadAddons();
         if (mode !== 'server') {
           mode = 'server'; store(LS.mode, mode);
           state.data = load(LS.data, null) || { journeys: [], steps: [] };
@@ -313,6 +315,58 @@
     });
   }
 
+  // ---------- add-ons ----------
+  // Optional features that live in their own folder (e.g. app/goals/) and are switched on in Settings.
+  // The server lists them in /api/health; with sample data, the switch is kept on this device.
+  // An add-on's script calls Journeys.register({ id, route, screen, tab, actions, sheet, onSubmit, onInput, settingsPanel, start }).
+  var DEMO_ADDONS = [{ id: 'goals', name: 'Goals & habits', description: 'Habits with streaks, goals with milestones, and evening check-ins from Home Assistant.', script: 'goals/goals.js', style: 'goals/goals.css' }];
+  var addons = {};
+  function addonList() {
+    if (isDemo()) {
+      var on = load(LS.addonsDemo, {});
+      return DEMO_ADDONS.map(function (a) { return Object.assign({}, a, { enabled: !!on[a.id] }); });
+    }
+    var l = (state.server && state.server.addons) || load(LS.addons, []);
+    return Array.isArray(l) ? l : [];
+  }
+  function eachAddon(fn) { Object.keys(addons).forEach(function (k) { fn(addons[k]); }); }
+  function loadAddons() {
+    var list = addonList();
+    // Turned off (here or on another device) while loaded: reload without it.
+    if (Object.keys(addons).some(function (id) { return !list.some(function (a) { return a.id === id && a.enabled; }); })) { location.reload(); return; }
+    list.forEach(function (a) {
+      if (!a.enabled || addons[a.id] || document.querySelector('script[data-addon="' + a.id + '"]')) return;
+      if (!/^[\w-]+\/[\w.-]+\.js$/.test(a.script || '')) return; // only the app's own files
+      if (a.style) { var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = a.style; document.head.appendChild(l); }
+      var sc = document.createElement('script'); sc.src = a.script; sc.dataset.addon = a.id; document.body.appendChild(sc);
+    });
+  }
+  function toggleAddon(a, on, input) {
+    function done() { location.reload(); } // simplest way to load or unload an add-on's files
+    if (isDemo()) { var m = load(LS.addonsDemo, {}); m[a.id] = on; store(LS.addonsDemo, m); done(); return; }
+    if (!on && !window.confirm('Turn off ' + a.name + '? Everything you saved stays in your Sheet, and turning it back on brings it back.')) { input.checked = true; return; }
+    input.disabled = true;
+    var body = { values: {} };
+    body.values[a.setting] = on;
+    settingsCall('POST', body).then(function () {
+      var l = addonList().map(function (x) { return x.id === a.id ? Object.assign({}, x, { enabled: on }) : x; });
+      store(LS.addons, l);
+      done();
+    }, function (e) { input.disabled = false; input.checked = !on; toast(e.message); });
+  }
+  window.Journeys = {
+    register: function (m) { addons[m.id] = m; if (m.start) m.start(); render(); },
+    h: {
+      esc: esc, icon: icon, ICONS: ICONS, toast: toast, go: go, render: render, renderSheet: renderSheet, closeSheet: closeSheet,
+      openSheet: function (sh) { state.sheet = Object.assign({ kind: 'addon' }, sh); state.menu = false; render(); },
+      sheet: function () { return state.sheet; },
+      today: today, addDays: addDays, days: days, validIso: validIso, fmt: fmt, plural: plural, uid: uid, pad: pad,
+      isDemo: isDemo, load: load, store: store, dateField: dateField, syncPill: syncPill, settingsCall: settingsCall, haCall: haCall,
+      token: function () { return cfg.token; }, server: function () { return state.server; },
+      MONTHS: MONTHS, MONTHS_LONG: MONTHS_LONG, WEEKDAYS: WEEKDAYS
+    }
+  };
+
   // ---------- routing ----------
   function route() {
     var h = (location.hash || '#/').slice(1);
@@ -325,6 +379,9 @@
     if (h === '/search') return { name: 'search' };
     if (h === '/settings') return { name: 'settings' };
     if (h === '/server') return { name: 'server' };
+    var ar = null;
+    eachAddon(function (m) { if (!ar && m.route) { ar = m.route(h); if (ar) ar.addon = m.id; } });
+    if (ar) return ar;
     return { name: 'home' };
   }
   function go(hash) { if (location.hash !== hash) location.hash = hash; else render(); }
@@ -337,7 +394,8 @@
   function render() {
     var r = route();
     var html;
-    if (r.name === 'journey') html = journeyScreen(r.id);
+    if (r.addon) html = addons[r.addon].screen(r) + (r.tab ? tabbar(r.tab) : '');
+    else if (r.name === 'journey') html = journeyScreen(r.id);
     else if (r.name === 'new') html = newScreen();
     else if (r.name === 'insights') html = insightsScreen() + tabbar('insights');
     else if (r.name === 'calendar') html = calendarScreen() + tabbar('insights');
@@ -360,8 +418,10 @@
     function tab(id, href, ic, label) {
       return '<a class="tab" href="' + href + '"' + (cur === id ? ' aria-current="page"' : '') + '>' + icon(ic, 22) + label + '</a>';
     }
+    var extra = '';
+    eachAddon(function (m) { if (m.tab) extra += tab(m.tab.id, m.tab.href, m.tab.icon, m.tab.label); });
     return '<nav class="tabbar" aria-label="Main"><div class="tabbar-inner">' +
-      tab('home', '#/', 'list', 'Journeys') + tab('insights', '#/insights', 'chart', 'Insights') + tab('settings', '#/settings', 'gear', 'Settings') +
+      tab('home', '#/', 'list', 'Journeys') + extra + tab('insights', '#/insights', 'chart', 'Insights') + tab('settings', '#/settings', 'gear', 'Settings') +
       '</div></nav>';
   }
 
@@ -630,6 +690,14 @@
         '<button class="btn secondary small" type="button" data-action="copy-mcp" data-v="' + esc(mcpUrl) + '">Copy</button></div>' +
         '<p class="settings-help">' + (srv.authRequired ? 'Send your access token as <code>Authorization: Bearer …</code>.' : 'Set <code>APP_TOKEN</code> on the server first: these tools can also delete.') + ' Setup for each app is in the README.</p></section>';
     }
+    var al = addonList();
+    if (al.length) {
+      h += '<section class="panel"><h2>Add-ons</h2>' + al.map(function (a) {
+        var panel = a.enabled && addons[a.id] && addons[a.id].settingsPanel ? addons[a.id].settingsPanel() : '';
+        return '<div class="toggle-row"><label for="addon-' + esc(a.id) + '" style="flex:1;min-width:0"><span class="t">' + esc(a.name) + '</span><span class="s">' + esc(a.description || '') + '</span></label>' +
+          '<input type="checkbox" role="switch" class="switch" id="addon-' + esc(a.id) + '" data-addon-toggle="' + esc(a.id) + '"' + (a.enabled ? ' checked' : '') + '></div>' + panel;
+      }).join('<div class="divider"></div>') + '</section>';
+    }
     if (!isDemo()) {
       h += '<a class="row-card" href="#/server"><div style="min-width:0"><div class="t">Server settings</div>' +
         '<div class="s">Sheet, time zone, Home Assistant, nudge timing</div></div>' + icon('chevron', 20) + '</a>';
@@ -646,7 +714,7 @@
         '<div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn secondary small" data-action="reset-demo">Reset sample data</button>' +
         '<button class="btn danger small" data-action="clear-demo">Clear all</button></div></section>';
     }
-    h += '<p class="settings-help" style="text-align:center">Journeys v2.4</p></main>';
+    h += '<p class="settings-help" style="text-align:center">Journeys v2.5</p></main>';
     return h;
   }
 
@@ -1385,6 +1453,11 @@
       return mountSheet(finishSheetHtml(sh, fj), 'finish|' + sh.jid);
     }
     if (sh.kind === 'share') return mountSheet(shareSheetHtml(sh), 'share|' + (sh.jid || sh.year));
+    if (sh.kind === 'addon') {
+      var am = addons[sh.addon];
+      if (!am) { state.sheet = null; sheetRoot.innerHTML = ''; document.body.style.overflow = ''; return; }
+      return mountSheet(am.sheet(sh), 'addon|' + sh.addon + '|' + (sh.key || ''));
+    }
     var j = state.data.journeys.find(function (x) { return x.id === sh.jid; });
     if (!j) { state.sheet = null; sheetRoot.innerHTML = ''; return; }
     document.body.style.overflow = 'hidden';
@@ -1571,7 +1644,8 @@
       if (!el) return;
     }
     if (!el) return;
-    var fn = actions[el.dataset.action];
+    var name = el.dataset.action, fn = actions[name];
+    if (!fn) eachAddon(function (m) { if (!fn && m.actions && m.actions[name]) fn = m.actions[name]; });
     if (fn) { if (el.tagName === 'A') ev.preventDefault(); fn(el, ev); }
   });
 
@@ -1602,6 +1676,7 @@
       }
     }
     if (t.form && t.form.id === 'new-form') { readNewForm(); if (t.id === 'nj-date') syncDateChips('nj-date'); }
+    eachAddon(function (m) { if (m.onInput) m.onInput(t, ev); });
     if (t.id === 'search-q') {
       state.search.q = t.value;
       var box = document.getElementById('search-results');
@@ -1614,6 +1689,8 @@
     }
   });
   document.addEventListener('change', function (ev) {
+    var at = ev.target.dataset && ev.target.dataset.addonToggle;
+    if (at) { var ad = addonList().find(function (x) { return x.id === at; }); if (ad) toggleAddon(ad, ev.target.checked, ev.target); return; }
     var k = ev.target.dataset && ev.target.dataset.shareOpt;
     if (k && state.sheet && state.sheet.kind === 'share') { state.sheet[k] = ev.target.checked; buildShareImage(); }
   });
@@ -1625,6 +1702,9 @@
   document.addEventListener('submit', function (ev) {
     ev.preventDefault();
     var f = ev.target;
+    var handled = false;
+    eachAddon(function (m) { if (!handled && m.onSubmit && m.onSubmit(f)) handled = true; });
+    if (handled) return;
     if (f.id === 'step-form') {
       readSheetForm();
       var sh = state.sheet, err = document.getElementById('st-err');
@@ -1726,6 +1806,7 @@
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') sync(); });
 
   // ---------- start ----------
+  loadAddons(); // the last known list, so add-ons also work offline
   render();
   probe().then(sync);
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {

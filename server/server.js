@@ -16,6 +16,8 @@
  *   NUDGE_HOUR                      hour of day for the daily check (default 9)
  *   NUDGE_AFTER_DAYS                days on one step before a nudge, when there's no history (default 7)
  *   NUDGE_REPEAT_DAYS               days before nudging about the same step again (default 3)
+ *   GOALS_ENABLED                   turn on the Goals & habits add-on (default off; also a switch in Settings)
+ *   CHECKIN_HOUR, GOAL_STALL_DAYS   Goals & habits: evening check-in hour (21), days before a goal counts as stalled (14)
  *
  * Other: PORT (default 8080), DATA_DIR (default /data),
  *        MCP_ALLOWED_ORIGINS (browser origins allowed to call /mcp; same-origin is always allowed)
@@ -42,7 +44,7 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || '/data');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const SHEETS_BASE = (process.env.SHEETS_API_BASE || 'https://sheets.googleapis.com/v4/spreadsheets').replace(/\/$/, '');
 const SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
-const VERSION = '2.4.0';
+const VERSION = '2.5.0';
 const MCP_ALLOWED_ORIGINS = (process.env.MCP_ALLOWED_ORIGINS || '').split(',').map((x) => x.trim()).filter(Boolean);
 const NUDGE_CHECK_MS = intEnv('NUDGE_CHECK_MS', 10 * 60 * 1000, 200, 24 * 3600 * 1000);
 
@@ -134,6 +136,9 @@ const SETTINGS = {
   nudgeAfterDays: { env: 'NUDGE_AFTER_DAYS', def: 7, parse: intIn('Nudge after', 1, 365) },
   nudgeRepeatDays: { env: 'NUDGE_REPEAT_DAYS', def: 3, parse: intIn('Ask again after', 1, 365) }
 };
+// Add-on: Goals & habits (server/goals.js). Off unless GOALS_ENABLED or the switch in Settings turns it on.
+const goalsAddon = require('./goals');
+Object.assign(SETTINGS, goalsAddon.settings({ intIn, userError }));
 const envValues = {};
 for (const [k, s] of Object.entries(SETTINGS)) {
   const raw = process.env[s.env];
@@ -675,10 +680,17 @@ async function saveSettings(body) {
   });
 }
 
+// ---------- add-on: Goals & habits ----------
+const goals = goalsAddon.init({
+  conf, sheets, exclusive, today, validIso, toSerial, toIso, str, userError, AppError, haNotify, haEnabled, plural, days, addDays, sheetUrl,
+  NUDGE_CHECK_MS, STATIC_DIR
+});
+
 // ---------- MCP (AI assistants) ----------
 const mcp = require('./mcp')({
   VERSION, ensureSetup, readAll, writeAll, apply, exclusive, stepsOf, history, journeyStatus,
-  days, today, validIso, addDays, userError, AppError, sheetUrl
+  days, today, validIso, addDays, userError, AppError, sheetUrl,
+  extraTools: (helpers) => (goals.enabled() ? goals.mcpTools(helpers) : [])
 });
 
 // ---------- HTTP ----------
@@ -748,7 +760,8 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, {
         ok: true, app: 'journeys', version: VERSION, authRequired: !!APP_TOKEN, configured: !!conf.spreadsheetId,
         ha: { enabled: haEnabled(), nudgeHour: conf.nudgeHour },
-        mcp: { path: '/mcp', tools: mcp.tools.length }
+        mcp: { path: '/mcp', tools: mcp.allTools().length },
+        addons: [goals.addon()]
       });
     }
     if (pathname === '/api' || pathname.startsWith('/api/')) {
@@ -761,6 +774,7 @@ const server = http.createServer(async (req, res) => {
       if (route === 'POST /api/ha/check') return sendJson(res, 200, { ok: true, payload: await runNudges() });
       if (route === 'GET /api/settings') return sendJson(res, 200, { ok: true, payload: settingsView() });
       if (route === 'POST /api/settings') return sendJson(res, 200, { ok: true, payload: await saveSettings(await readJson(req)) });
+      if (pathname === '/api/goals' || pathname.startsWith('/api/goals/')) return await goals.handle(route, req, res, { readJson, sendJson });
       if (route === 'POST /api/ha/test') {
         await haNotify({ title: 'Journeys', message: 'Test from your Journeys server. Nudges will arrive like this.', data: { tag: 'journeys-test', group: 'journeys' } });
         return sendJson(res, 200, { ok: true, payload: { sent: true } });
@@ -783,7 +797,8 @@ server.listen(PORT, () => {
   if (Object.keys(overrides).length) console.log(`Using settings saved from the app: ${Object.keys(overrides).join(', ')} (${SETTINGS_FILE})`);
   try { console.log(`Using service account ${serviceAccount().email} — share your Sheet with it as Editor.`); } catch (e) { console.warn(e.message); }
   if (!haEnabled() && (conf.haUrl || HA_TOKEN || conf.haNotify)) console.warn('Home Assistant nudges are off: they need HA_TOKEN in .env plus the HA URL and notify service.');
-  console.log(`MCP endpoint for AI assistants: /mcp (${mcp.tools.length} tools)`);
+  console.log(`MCP endpoint for AI assistants: /mcp (${mcp.allTools().length} tools)`);
   startNudgeSchedule();
+  goals.start();
 });
 for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => server.close(() => process.exit(0)));

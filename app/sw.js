@@ -1,6 +1,8 @@
 /* Service worker: keeps the app working offline. Data sync goes straight to the network. */
-var VERSION = 'journeys-v5';
-var SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
+var VERSION = 'journeys-v6';
+var SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png',
+  // add-ons (cached even when off, so turning one on works offline)
+  'goals/goals.js', 'goals/goals.css', 'goals/logic.js'];
 
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(VERSION).then(function (c) { return c.addAll(SHELL); }).then(function () { return self.skipWaiting(); }));
