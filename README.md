@@ -211,7 +211,7 @@ Habits you check off (every day, a number of times a week, or set days) with str
 - **Habits:** tap the circle on the **Today** screen to check one off, and tap again to undo. Each habit allows 0 to 3 skipped days a week, so one missed day doesn't break a long streak. On a habit's screen, tap any past day in the calendar to fill it in (done → skip → empty).
 - **Goals** track progress in one of three ways:
   - **Adding up amounts:** each entry adds to the total (+$500 toward savings, +1 book).
-  - **Reaching a number:** you log readings and move from where you are now to your goal, up or down (weight 200 → 180 lbs). Milestones count toward the goal, and the Sheet keeps the start in the **Start value** column.
+  - **Reaching a number:** you move from where you are now to your goal, up or down (savings $3,400 → $10,000, weight 200 → 180 lbs). Each entry is either **added on** (a $500 deposit) or a **new total** (what the scale or your bank says). Goals going up default to adding; goals going down default to a new reading. The Sheet keeps the start in the Goals tab's **Start value** column and each entry's type in the Goal progress tab's **Kind** column (`Add` or `Set`).
   - **Counting habit check-ins:** done check-ins of the linked habits count (e.g. *Gym 50 times*).
 
   With a deadline, the form shows the weekly pace it needs. For weight goals (lbs or kg) it warns when that's faster than the commonly recommended 1–2 lbs (about 0.5–1 kg) a week, and offers a later date. A goal shows whether you're **ahead**, **on track**, **behind** or **stalled**, its milestones (planned and actual dates), and a pace chart with your projected finish.

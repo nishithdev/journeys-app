@@ -213,7 +213,7 @@
           d.habits.forEach(function (x) { if (x.goalId === b.id) x.goalId = ''; });
           break;
         case 'addProgress':
-          d.progress.push({ id: b.id, goalId: b.goalId, date: b.date, amount: +b.amount, note: b.note || '' });
+          d.progress.push({ id: b.id, goalId: b.goalId, date: b.date, amount: +b.amount, note: b.note || '', kind: b.kind || 'add' });
           break;
         case 'deleteProgress':
           d.progress = d.progress.filter(function (p) { return p.id !== b.id; });
@@ -449,13 +449,14 @@
       }
 
       if (g.measure === 'number' || g.measure === 'value') {
-        var isVal = g.measure === 'value';
-        var sign = function (n) { return isVal ? '' : n > 0 ? '+' : ''; };
-        if (g.status === 'active') out += '<button class="btn" style="flex:none" data-action="g-log" data-id="' + esc(id) + '">' + icon('plus', 18, 2.6) + (isVal ? 'Log a reading' : 'Log progress') + '</button>';
+        var isVal = g.measure === 'value', readings = isVal && L.defaultKind(g) === 'set';
+        var isSet = function (p) { return isVal && (p.kind || L.defaultKind(g)) === 'set'; };
+        var entryText = function (p) { return isSet(p) ? amt(p.amount, g.unit) + (readings ? '' : ' (new total)') : (p.amount > 0 ? '+' : '') + amt(p.amount, g.unit); };
+        if (g.status === 'active') out += '<button class="btn" style="flex:none" data-action="g-log" data-id="' + esc(id) + '">' + icon('plus', 18, 2.6) + (readings ? 'Log a reading' : 'Log progress') + '</button>';
         var entries = gs.data.progress.filter(function (p) { return p.goalId === id; }).sort(function (a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : 0; });
         if (entries.length) {
-          out += '<div class="section-label">' + (isVal ? 'Readings' : 'Progress') + '</div><div class="result-list">' + entries.slice(0, 30).map(function (p) {
-            return '<button class="result-row g-entry" data-action="g-del-entry" data-id="' + esc(p.id) + '" aria-label="' + esc(sign(p.amount) + amt(p.amount, g.unit) + ' on ' + h.fmt(p.date) + '. Tap to delete.') + '"><span class="rl-body"><span class="rl-row"><span class="t">' + esc(sign(p.amount) + amt(p.amount, g.unit)) + '</span><span class="s">' + esc(h.fmt(p.date)) + '</span></span>' +
+          out += '<div class="section-label">' + (readings ? 'Readings' : 'Progress') + '</div><div class="result-list">' + entries.slice(0, 30).map(function (p) {
+            return '<button class="result-row g-entry" data-action="g-del-entry" data-id="' + esc(p.id) + '" aria-label="' + esc(entryText(p) + ' on ' + h.fmt(p.date) + '. Tap to delete.') + '"><span class="rl-body"><span class="rl-row"><span class="t">' + esc(entryText(p)) + '</span><span class="s">' + esc(h.fmt(p.date)) + '</span></span>' +
               (p.note ? '<span class="s">' + esc(p.note) + '</span>' : '') + '</span></button>';
           }).join('') + '</div>';
         }
@@ -566,7 +567,7 @@
         Object.assign(f, g ? { name: g.name, measure: g.measure, target: String(g.target), startValue: g.measure === 'value' ? String(g.startValue) : '', unit: g.unit, started: g.started, due: g.due || '', habits: gs.data.habits.filter(function (x) { return x.goalId === g.id; }).map(function (x) { return x.id; }) }
           : { name: '', measure: 'number', target: '', startValue: '', unit: '', started: h.today(), due: '', habits: [] });
       } else if (kind === 'progress') {
-        Object.assign(f, { goalId: editId, amount: '', date: h.today(), note: '' });
+        Object.assign(f, { goalId: editId, amount: '', date: h.today(), note: '', entryKind: L.defaultKind(goalById(editId)) });
       }
       gs.menu = false;
       h.openSheet(f);
@@ -664,15 +665,21 @@
     function progressSheet(f) {
       var g = goalById(f.goalId);
       if (!g) return '';
-      var isVal = g.measure === 'value', cur = isVal ? gstats(g).total : null;
+      var isVal = g.measure === 'value', cur = gstats(g).total, setting = isVal && f.entryKind === 'set';
+      var unitL = g.unit ? ' (' + esc(g.unit) + ')' : '';
+      var typed = parseFloat(String(f.amount).replace(/[,$€£₹\s]/g, ''));
+      var preview = isFinite(typed) && String(f.amount).trim() !== '' ? (setting ? 'Your total becomes ' + amt(typed, g.unit) : 'Your total becomes ' + amt(Math.round((cur + typed) * 100) / 100, g.unit)) : '';
       return '<div class="scrim" data-action="scrim"><form class="sheet" id="g-progress-form" role="dialog" aria-modal="true" aria-labelledby="g-title" novalidate>' +
-        '<div class="grab" aria-hidden="true"></div><div class="top"><div><div class="eyebrow">' + esc(g.name) + '</div><h1 class="small" id="g-title" style="font-size:24px">' + (isVal ? 'Log a reading' : 'Log progress') + '</h1></div>' +
+        '<div class="grab" aria-hidden="true"></div><div class="top"><div><div class="eyebrow">' + esc(g.name) + '</div><h1 class="small" id="g-title" style="font-size:24px">' + (isVal && L.defaultKind(g) === 'set' ? 'Log a reading' : 'Log progress') + '</h1></div>' +
         '<button type="button" class="icon-btn soft" data-action="close-sheet" aria-label="Close">' + icon('close', 18, 2.4) + '</button></div>' +
-        (isVal
-          ? '<div class="field"><label for="g-amount">Reading' + (g.unit ? ' (' + esc(g.unit) + ')' : '') + '</label><input class="input" id="g-amount" name="amount" inputmode="decimal" autocomplete="off" placeholder="e.g. ' + esc(String(cur)) + '" value="' + esc(f.amount) + '">' +
-            '<span class="field-note">Where you are now, like what the scale says. Last: ' + esc(amt(cur, g.unit)) + '. Goal: ' + esc(amt(g.target, g.unit)) + '.</span></div>'
-          : '<div class="field"><label for="g-amount">How much' + (g.unit ? ' (' + esc(g.unit) + ')' : '') + '?</label><input class="input" id="g-amount" name="amount" inputmode="decimal" autocomplete="off" placeholder="e.g. ' + (g.unit === '$' ? '500' : '1') + '" value="' + esc(f.amount) + '">' +
-            '<span class="field-note">Adds to your total. Use a minus to correct, like -200.</span></div>') +
+        (isVal ? '<div class="seg" role="group" aria-label="How to log it"><button type="button" class="seg-item" data-action="g-f-kind" data-v="add" aria-current="' + (setting ? 'false' : 'page') + '">Add to it</button>' +
+          '<button type="button" class="seg-item" data-action="g-f-kind" data-v="set" aria-current="' + (setting ? 'page' : 'false') + '">' + (L.defaultKind(g) === 'set' ? 'New reading' : 'New total') + '</button></div>' : '') +
+        (setting
+          ? '<div class="field"><label for="g-amount">' + (L.defaultKind(g) === 'set' ? 'Reading' : 'New total') + unitL + '</label><input class="input" id="g-amount" name="amount" inputmode="decimal" autocomplete="off" placeholder="e.g. ' + esc(String(cur)) + '" value="' + esc(f.amount) + '">' +
+            '<span class="field-note">Replaces the current ' + esc(amt(cur, g.unit)) + ', like what the scale or your bank says. Goal: ' + esc(amt(g.target, g.unit)) + '.</span></div>'
+          : '<div class="field"><label for="g-amount">How much to add' + unitL + '?</label><input class="input" id="g-amount" name="amount" inputmode="decimal" autocomplete="off" placeholder="e.g. ' + (g.unit === '$' ? '500' : '1') + '" value="' + esc(f.amount) + '">' +
+            '<span class="field-note">Adds to your current ' + esc(amt(cur, g.unit)) + '. Use a minus to take some out, like -200.</span></div>') +
+        '<p class="hint" id="g-amount-preview" aria-live="polite"' + (preview ? '' : ' hidden') + '>' + esc(preview) + '</p>' +
         h.dateField('g-date', f.date) +
         '<div class="field"><label for="g-note">Note <span class="opt">(optional)</span></label><input class="input" id="g-note" name="note" autocomplete="off" value="' + esc(f.note) + '"></div>' +
         '<p class="error-text" id="g-err" role="alert"></p><button class="btn" type="submit" style="flex:none">Save</button></form></div>';
@@ -692,10 +699,11 @@
       if (form.id === 'g-progress-form') {
         var a = parseFloat(String(f.amount).replace(/[,$€£₹\s]/g, ''));
         var g0 = goalById(f.goalId);
-        if (g0.measure === 'value' ? !isFinite(a) || String(f.amount).trim() === '' : !isFinite(a) || !a) return fail(g0.measure === 'value' ? 'Enter the reading, like 196.4.' : 'Enter an amount, like 500.', 'amount');
+        var setting0 = g0.measure === 'value' && f.entryKind === 'set';
+        if (setting0 ? !isFinite(a) || String(f.amount).trim() === '' : !isFinite(a) || !a) return fail(setting0 ? 'Enter the new number, like ' + gstats(g0).total + '.' : 'Enter an amount, like 500.', 'amount');
         if (!h.validIso(f.date)) return fail('Pick a date.', 'date');
         var before = gstats(g0);
-        mutate({ action: 'addProgress', id: h.uid('P'), goalId: f.goalId, amount: a, date: f.date, note: (f.note || '').trim() });
+        mutate({ action: 'addProgress', id: h.uid('P'), goalId: f.goalId, amount: a, kind: g0.measure === 'value' ? f.entryKind : 'add', date: f.date, note: (f.note || '').trim() });
         h.closeSheet();
         var s0 = gstats(g0);
         var hitsBefore = before.milestones.filter(function (m) { return m.hit; }).length;
@@ -757,6 +765,7 @@
       'g-f-skips': function (el) { reform(function (f) { f.skips = +el.dataset.v; }); },
       'g-f-goal': function (el) { reform(function (f) { f.goalId = el.dataset.v; }); },
       'g-f-measure': function (el) { reform(function (f) { f.measure = el.dataset.v; }); },
+      'g-f-kind': function (el) { reform(function (f) { f.entryKind = el.dataset.v; }); },
       'g-f-due': function (el) { reform(function (f) { f.due = el.dataset.v; }); },
       'g-f-habit': function (el) { reform(function (f) { var i = f.habits.indexOf(el.dataset.v); if (i >= 0) f.habits.splice(i, 1); else f.habits.push(el.dataset.v); }); },
       'g-check': function (el) {
@@ -858,6 +867,15 @@
             var f = readForm(), box = document.getElementById('g-preview');
             if (f && box && f.form === 'goal') box.innerHTML = goalPreview(f); // only the preview, never the fields being typed in
           }, 250);
+        }
+        if (t.id === 'g-amount') {
+          var f2 = readForm(), g2 = f2 && goalById(f2.goalId), pv = document.getElementById('g-amount-preview');
+          if (g2 && pv) {
+            var n2 = parseFloat(String(f2.amount).replace(/[,$€£₹\s]/g, '')), cur2 = gstats(g2).total;
+            var ok2 = isFinite(n2) && String(f2.amount).trim() !== '';
+            pv.hidden = !ok2;
+            if (ok2) pv.textContent = 'Your total becomes ' + amt(g2.measure === 'value' && f2.entryKind === 'set' ? n2 : Math.round((cur2 + n2) * 100) / 100, g2.unit);
+          }
         }
         if (t.id === 'g-date') document.querySelectorAll('[data-action="set-date"][data-for="g-date"]').forEach(function (c) { c.setAttribute('aria-pressed', String(c.dataset.v === t.value)); });
       }

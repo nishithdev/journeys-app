@@ -16,7 +16,7 @@ const TABS = {
   habits: { title: 'Habits', headers: ['Habit ID', 'Habit', 'Schedule', 'Times a week', 'Days', 'Skips a week', 'Goal ID', 'Reminder', 'Created', 'Status', 'Last reminded'], dates: [8, 10] },
   checkins: { title: 'Check-ins', headers: ['Check-in ID', 'Habit ID', 'Habit', 'Date', 'Result', 'Source'], dates: [3] },
   goals: { title: 'Goals', headers: ['Goal ID', 'Goal', 'Measure', 'Target', 'Unit', 'Started', 'Due', 'Milestones', 'Status', 'Finished', 'Last nudged', 'Start value'], dates: [5, 6, 9, 10] },
-  progress: { title: 'Goal progress', headers: ['Entry ID', 'Goal ID', 'Goal', 'Date', 'Amount', 'Total', 'Note'], dates: [3] }
+  progress: { title: 'Goal progress', headers: ['Entry ID', 'Goal ID', 'Goal', 'Date', 'Amount', 'Total', 'Note', 'Kind'], dates: [3] }
 };
 const KEYS = Object.keys(TABS);
 const SCHEDULES = { daily: 'Every day', weekly: 'Times a week', days: 'Set days' };
@@ -136,10 +136,13 @@ function init(x) {
         finished: toIso(row[9]), lastNudged: toIso(row[10]), startValue: num(row[11], 0)
       })),
       progress: (pr || []).filter(hasId).map((row) => ({
-        id: String(row[0]).trim(), goalId: str(row[1]).trim(), date: toIso(row[3]), amount: num(row[4], 0), note: str(row[6])
+        id: String(row[0]).trim(), goalId: str(row[1]).trim(), date: toIso(row[3]), amount: num(row[4], 0), note: str(row[6]),
+        kind: /^set/i.test(str(row[7]).trim()) ? 'set' : /^add/i.test(str(row[7]).trim()) ? 'add' : ''
       })).filter((p) => p.date)
     };
     d.goals.forEach((g) => { if (!g.started) g.started = today(); });
+    // Rows without a Kind (older ones): adds, except readings toward a lower number (weight).
+    d.progress.forEach((p) => { if (!p.kind) { const g = d.goals.find((x) => x.id === p.goalId); p.kind = g ? L.defaultKind(g) : 'add'; } });
     return d;
   }
 
@@ -159,10 +162,10 @@ function init(x) {
     };
     let cur = null, total = 0;
     d.progress.slice().sort(byNameThenDate(gName, 'goalId')).forEach((p) => {
-      if (p.goalId !== cur) { cur = p.goalId; total = 0; }
       const goal = d.goals.find((g) => g.id === p.goalId);
-      total = goal && goal.measure === 'value' ? p.amount : Math.round((total + p.amount) * 100) / 100; // readings: the latest one
-      rows.progress.push([p.id, p.goalId, gName[p.goalId] || '', dc(p.date), p.amount, total, p.note || '']);
+      if (p.goalId !== cur) { cur = p.goalId; total = goal && goal.measure === 'value' ? goal.startValue : 0; }
+      total = p.kind === 'set' && goal && goal.measure === 'value' ? p.amount : Math.round((total + p.amount) * 100) / 100; // a new total, or added on
+      rows.progress.push([p.id, p.goalId, gName[p.goalId] || '', dc(p.date), p.amount, total, p.note || '', goal && goal.measure === 'value' && p.kind === 'set' ? 'Set' : 'Add']);
     });
     const data = [];
     for (const k of KEYS) {
@@ -283,9 +286,10 @@ function init(x) {
         if (g.measure === 'checkins') throw userError('This goal counts habit check-ins by itself.');
         const id = clean(b.id, 40) || newId('P');
         if (d.progress.some((p) => p.id === id)) return { id };
-        const a = amount(b.amount, g.measure === 'value' ? 'Reading' : 'Amount');
-        if (!a && g.measure !== 'value') throw userError('Amount can\'t be 0.');
-        d.progress.push({ id, goalId: g.id, date: dateOr(b.date, today()), amount: a, note: clean(b.note, 500) });
+        const kind = g.measure === 'value' ? (b.kind === 'set' || b.kind === 'add' ? b.kind : L.defaultKind(g)) : 'add';
+        const a = amount(b.amount, kind === 'set' ? 'Reading' : 'Amount');
+        if (!a && kind === 'add') throw userError('Amount can\'t be 0.');
+        d.progress.push({ id, goalId: g.id, date: dateOr(b.date, today()), amount: a, note: clean(b.note, 500), kind });
         return { id };
       }
       case 'goalNudged': // "Not now" on a stalled-goal notification: don't ask again for a week
@@ -613,15 +617,16 @@ function init(x) {
       },
       {
         name: 'log_progress', title: 'Log goal progress',
-        description: 'Add progress to a goal: for number goals an amount that adds up (500 toward savings, 1 book; negative to correct); for value goals the new reading (e.g. today\'s weight, 196.4).',
+        description: 'Log progress on a goal. By default the amount is added (500 toward savings, 1 book; negative to correct). For value goals heading down (e.g. weight 200 → 180) it defaults to a new reading instead (196.4). Use mode to choose.',
         inputSchema: { type: 'object', properties: {
-          goal: s('Goal id or name.'), amount: { type: 'number', description: 'How much to add, or the new reading for value goals.' },
+          goal: s('Goal id or name.'), amount: { type: 'number', description: 'How much to add, or the new total/reading with mode=set.' },
+          mode: s('add (adds to the total) or set (the new total/reading; value goals only). Defaults as described above.', { enum: ['add', 'set'] }),
           date: s('YYYY-MM-DD, "today" or "yesterday". Defaults to today.'), note: s('Optional note.')
         }, required: ['goal', 'amount'], additionalProperties: false },
         annotations: Object.assign({ title: 'Log goal progress' }, WRITE),
         async run(a) {
           const g = pick((await current()).goals, a.goal, 'goal');
-          const { d } = await change({ action: 'addProgress', goalId: g.id, amount: a.amount, date: parseDate(a.date), note: a.note || '' });
+          const { d } = await change({ action: 'addProgress', goalId: g.id, amount: a.amount, kind: a.mode, date: parseDate(a.date), note: a.note || '' });
           const f = goalFacts(d, d.goals.find((x) => x.id === g.id), today());
           return { text: `${g.name}: ${f.progress_text} (${f.percent}%), ${f.status}.`, data: f };
         }

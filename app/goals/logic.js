@@ -134,6 +134,8 @@
     for (var i = 1; i <= n; i++) out.push({ value: i === n ? t : roundStep(f + (t - f) * i / n, t - f), due: addDays(started, Math.round(span * i / n)) });
     return out;
   }
+  // How an entry counts when it isn't said: added on, except readings toward a lower number (weight 200 → 180).
+  function defaultKind(g) { return g.measure === 'value' && Number(g.target) < Number(g.startValue) ? 'set' : 'add'; }
   function goalMilestones(g) {
     return evenMilestones(g.target, g.started, g.due, 4, g.measure === 'value' ? g.startValue : null);
   }
@@ -156,7 +158,9 @@
         if (linked.indexOf(c.habitId) >= 0 && c.result !== 'skip' && validIso(c.date) && c.date >= g.started && c.date <= end) events.push({ date: c.date, amount: 1 });
       });
     } else {
-      (progress || []).forEach(function (p, i) { if (p.goalId === g.id && validIso(p.date)) events.push({ date: p.date, amount: Number(p.amount) || 0, i: i }); });
+      (progress || []).forEach(function (p, i) {
+        if (p.goalId === g.id && validIso(p.date)) events.push({ date: p.date, amount: Number(p.amount) || 0, i: i, set: isValue && (p.kind || defaultKind(g)) === 'set' });
+      });
     }
     events.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : (a.i || 0) - (b.i || 0); });
     var target = Number(g.target) || 0;
@@ -165,7 +169,7 @@
     // series: the value after each day with progress (a running total, or the latest reading)
     var total = from, series = [];
     events.forEach(function (e) {
-      total = isValue ? e.amount : total + e.amount;
+      total = e.set ? e.amount : total + e.amount; // a new total (reading), or added on
       if (series.length && series[series.length - 1].date === e.date) series[series.length - 1].total = total;
       else series.push({ date: e.date, total: total });
     });
@@ -253,7 +257,7 @@
   }
 
   return {
-    progressText: progressText, goalProgressText: goalProgressText, goalMilestones: goalMilestones, goalPace: goalPace,
+    progressText: progressText, defaultKind: defaultKind, goalProgressText: goalProgressText, goalMilestones: goalMilestones, goalPace: goalPace,
     DAY_NAMES: DAY_NAMES, validIso: validIso, addDays: addDays, days: days, weekday: weekday, weekStart: weekStart,
     normDays: normDays, scheduled: scheduled, scheduleLabel: scheduleLabel, habitStats: habitStats,
     evenMilestones: evenMilestones, parseMilestones: parseMilestones, formatMilestones: formatMilestones,
