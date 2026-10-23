@@ -46,7 +46,8 @@ class ScreenshotTest {
         waitForText("Continue")
         shot("2-check")
         compose.onNodeWithText("Continue").performScrollTo().performClick()
-        waitForText("waiting")
+        waitForText(System.getProperty("homebase.waitFor") ?: "waiting")
+        repeat(20) { Thread.sleep(100); compose.waitForIdle() } // let tile pictures arrive
         shot("3-launcher")
         compose.onNodeWithContentDescription("Settings").performClick()
         waitForText("Forget this server")

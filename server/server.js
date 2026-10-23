@@ -643,8 +643,38 @@ function parseHomebaseApps(raw) {
     const name = eq > 0 ? x.slice(0, eq).trim() : '';
     const url = eq > 0 ? x.slice(eq + 1).trim() : x;
     try { const u = new URL(url); if (!/^https?:$/.test(u.protocol)) throw new Error(); } catch (e) { console.warn(`Ignoring HOMEBASE_APPS entry "${x}": not an http(s) address`); return null; }
-    return { id: `extra-${i}`, name: name || new URL(url).hostname, url, color: '#5B6274', icon: '', subtitle: new URL(url).host };
+    return { id: `extra-${i}`, name: name || new URL(url).hostname, url, color: '#5B6274', icon: '', subtitle: new URL(url).host, named: !!name };
   }).filter(Boolean);
+}
+
+// An extra app that lists itself at /api/homebase (Life Quest does) gets its live tile:
+// its own subtitle, badge, colour and icon. Asked at most once a minute, with a short timeout,
+// so a slow or stopped app never holds up the launcher.
+const liveTiles = new Map(); // url -> { at, tile }
+async function liveTile(extra) {
+  const { named, ...plain } = extra;
+  const hit = liveTiles.get(extra.url);
+  if (hit && Date.now() - hit.at < 60 * 1000) return hit.tile || plain;
+  let tile = null;
+  try {
+    const base = extra.url.endsWith('/') ? extra.url : extra.url + '/';
+    const r = await fetch(new URL('api/homebase', base), { signal: AbortSignal.timeout(1500), headers: { Accept: 'application/json' } });
+    const a = r.ok && ((await r.json()).apps || [])[0];
+    if (a && typeof a === 'object') {
+      const abs = (u) => { try { const x = new URL(String(u), base); return /^https?:$/.test(x.protocol) ? x.href : ''; } catch (e) { return ''; } };
+      tile = Object.assign({}, plain, {
+        name: named ? plain.name : String(a.name || plain.name).slice(0, 40),
+        url: a.url ? abs(a.url) || plain.url : a.path ? abs(String(a.path).replace(/^\//, '')) || plain.url : plain.url,
+        color: /^#[0-9a-f]{6}$/i.test(a.color || '') ? a.color : plain.color,
+        icon: typeof a.icon === 'string' ? a.icon.slice(0, 30) : '',
+        iconUrl: a.iconUrl ? abs(a.iconUrl) : '',
+        subtitle: typeof a.subtitle === 'string' ? a.subtitle.slice(0, 120) : plain.subtitle,
+        badge: Math.max(0, Math.min(999, Number(a.badge) || 0))
+      });
+    }
+  } catch (e) { /* not reachable or not a Homebase app: a plain tile */ }
+  liveTiles.set(extra.url, { at: Date.now(), tile });
+  return tile || plain;
 }
 async function homebaseApps() {
   let subtitle = '', badge = 0;
@@ -660,7 +690,7 @@ async function homebaseApps() {
   } catch (e) { /* Sheet not reachable right now: still list the apps */ }
   const apps = [{ id: 'journeys', name: 'Journeys', path: '/', color: '#2451D6', icon: 'journeys', subtitle, badge, token: true }];
   if (conf.haUrl) apps.push({ id: 'home-assistant', name: 'Home Assistant', url: conf.haUrl, color: '#18BCF2', icon: 'home', subtitle: new URL(conf.haUrl).host });
-  apps.push(...HOMEBASE_APPS);
+  apps.push(...await Promise.all(HOMEBASE_APPS.map(liveTile)));
   const out = { apps };
   if (process.env.SERVER_NAME) out.server = { name: process.env.SERVER_NAME.trim() };
   return out;

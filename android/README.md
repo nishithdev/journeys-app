@@ -29,7 +29,20 @@ HOMEBASE_APPS=Jellyfin=http://alpha5:8096,Grafana=http://alpha5:3000
 SERVER_NAME=alpha5
 ```
 
-An older server without `/api/homebase` still works; Homebase shows Journeys on its own. Any other web server shows up as a single app.
+An extra app that answers `/api/homebase` itself (Life Quest does) gets a live tile: Journeys asks it at most once a minute and shows its own subtitle, badge, colour and icon. So `HOMEBASE_APPS=Life Quest=http://alpha5:3000` gives you Life Quest's level, ready steps and pixel trophy right in the launcher.
+
+You can also add any such app as a server of its own in Homebase (`http://alpha5:3000`). A server without `/api/homebase` still works: an older Journeys shows just Journeys, and any other web app shows up as a single tile.
+
+## Make your own app show up
+
+Answer `GET /api/homebase` with JSON:
+
+```
+{ "apps": [ { "id": "my-app", "name": "My App", "path": "/", "color": "#14151f",
+              "icon": "star", "iconUrl": "/icon.png", "subtitle": "3 things today", "badge": 3 } ] }
+```
+
+`path` (or a full `url`) and `iconUrl` can be relative to the server. `iconUrl` is drawn without smoothing, so pixel art stays crisp. Return `{"authRequired": true}` from `GET /api/health` if the app needs the access token.
 
 ## Security
 

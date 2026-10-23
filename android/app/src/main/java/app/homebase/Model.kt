@@ -19,6 +19,8 @@ data class HomeApp(
     /** Hand the stored access token to this app's page (Journeys reads it from its own settings). */
     val injectToken: Boolean = false,
     val manual: Boolean = false,
+    /** A picture for the tile (PNG/JPEG/WebP), drawn crisp so pixel art stays sharp. Empty: [icon] or the first letter. */
+    val iconUrl: String = "",
 )
 
 /** Pure helpers, no Android classes, so they're unit-tested on the JVM. */
@@ -61,8 +63,9 @@ object Model {
     }
 
     /**
-     * Reads the server's app list (GET /api/homebase on a Journeys server):
-     * { "server": { "name": "alpha5" }, "apps": [ { "id", "name", "url" or "path", "color", "icon", "subtitle", "badge", "token" } ] }
+     * Reads a server's app list (GET /api/homebase, answered by Journeys, Life Quest, or any server that wants a tile):
+     * { "server": { "name": "alpha5" }, "apps": [ { "id", "name", "url" or "path", "color", "icon", "iconUrl", "subtitle", "badge", "token" } ] }
+     * Paths (and a relative iconUrl) are resolved against [base].
      * Returns the server's name (if given) and the apps; entries without a name or address are skipped.
      */
     fun parseApps(base: String, json: String): Pair<String?, List<HomeApp>> {
@@ -86,6 +89,11 @@ object Model {
                 subtitle = a.optString("subtitle"),
                 badge = a.optInt("badge", 0).coerceAtLeast(0),
                 injectToken = a.optBoolean("token", false),
+                iconUrl = a.optString("iconUrl").trim().let { u ->
+                    // Only ever an http(s) address: a relative one is resolved against the server.
+                    val abs = if (u.isEmpty() || u.contains("://")) u else resolve(base, u.removePrefix("/"))
+                    if (abs.startsWith("http://") || abs.startsWith("https://")) abs else ""
+                },
             )
         }
         return name to apps
@@ -96,7 +104,7 @@ object Model {
         list.forEach {
             put(JSONObject().put("id", it.id).put("name", it.name).put("url", it.url).put("color", it.color)
                 .put("icon", it.icon).put("subtitle", it.subtitle).put("badge", it.badge)
-                .put("token", it.injectToken).put("manual", it.manual))
+                .put("token", it.injectToken).put("manual", it.manual).put("iconUrl", it.iconUrl))
         }
     }.toString()
 
@@ -107,7 +115,7 @@ object Model {
             (0 until a.length()).mapNotNull { i ->
                 val o = a.optJSONObject(i) ?: return@mapNotNull null
                 HomeApp(o.optString("id"), o.optString("name"), o.optString("url"), o.optLong("color", 0xFF3F5EFB),
-                    o.optString("icon"), o.optString("subtitle"), o.optInt("badge"), o.optBoolean("token"), o.optBoolean("manual"))
+                    o.optString("icon"), o.optString("subtitle"), o.optInt("badge"), o.optBoolean("token"), o.optBoolean("manual"), o.optString("iconUrl"))
             }
         } catch (e: Exception) { emptyList() }
     }

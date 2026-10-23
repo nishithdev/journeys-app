@@ -44,8 +44,8 @@ object Net {
     }
 
     /**
-     * Reaches the server and finds its apps:
-     * a Journeys server lists them at /api/homebase (with the token); any other web server becomes one app.
+     * Reaches the server and finds its apps. Any server can list apps at /api/homebase (Journeys and Life Quest do);
+     * a server that doesn't becomes a single app.
      */
     suspend fun check(base: String, token: String?): Check {
         val health = try { get("$base/api/health", timeoutMs = 5000) } catch (e: IOException) {
@@ -53,26 +53,54 @@ object Net {
         }
         val https = base.startsWith("https://")
         val info = if (health.code == 200) runCatching { JSONObject(health.body) }.getOrNull() else null
-        if (info?.optString("app") != "journeys") {
-            // Not a Journeys server: any page that answers is one app.
-            val page = try { get(base, timeoutMs = 5000) } catch (e: IOException) { return Check.Unreachable(e.message ?: "No answer") }
-            if (page.code >= 500) return Check.Unreachable("The server answered HTTP ${page.code}")
-            val name = Model.serverName(base)
-            return Check.Ok(name, listOf(HomeApp(id = "web", name = name, url = base, icon = "web")), page.ms, false, https)
-        }
-        if (info.optBoolean("authRequired") && token.isNullOrBlank()) return Check.NeedsToken
-        val res = try { get("$base/api/homebase", token) } catch (e: IOException) {
+        val isJourneys = info?.optString("app") == "journeys"
+        if (info?.optBoolean("authRequired") == true && token.isNullOrBlank()) return Check.NeedsToken
+
+        val list = try { get("$base/api/homebase", token) } catch (e: IOException) {
             return Check.Unreachable(e.message ?: "No answer")
         }
-        return when (res.code) {
-            200 -> runCatching { Model.parseApps(base, res.body) }.getOrNull()?.let { (name, apps) ->
-                Check.Ok(name ?: Model.serverName(base), apps, health.ms, true, https)
-            } ?: Check.Unreachable("The server's app list couldn't be read")
-            401 -> if (token.isNullOrBlank()) Check.NeedsToken else Check.BadToken
-            // An older Journeys server without the app list: just Journeys.
-            404 -> Check.Ok(Model.serverName(base), listOf(HomeApp("journeys", "Journeys", base, 0xFF2451D6, "journeys", injectToken = true)), health.ms, true, https)
-            else -> Check.Unreachable("The server answered HTTP ${res.code}")
+        when (list.code) {
+            200 -> {
+                val parsed = runCatching { Model.parseApps(base, list.body) }.getOrNull()
+                if (parsed != null && parsed.second.isNotEmpty()) {
+                    return Check.Ok(parsed.first ?: Model.serverName(base), parsed.second, health.ms, isJourneys, https)
+                }
+                if (isJourneys) return Check.Unreachable("The server's app list couldn't be read")
+            }
+            // Only a server that says it can use a token is asked for one (Grafana and friends answer 401 to unknown paths).
+            401 -> if (isJourneys || info?.has("authRequired") == true) return if (token.isNullOrBlank()) Check.NeedsToken else Check.BadToken
         }
+        // An older Journeys server without the app list: just Journeys.
+        if (isJourneys) {
+            return if (list.code == 404) Check.Ok(Model.serverName(base), listOf(HomeApp("journeys", "Journeys", base, 0xFF2451D6, "journeys", injectToken = true)), health.ms, true, https)
+            else Check.Unreachable("The server answered HTTP ${list.code}")
+        }
+        // Any other web server: whatever answers is one app.
+        val page = try { get(base, timeoutMs = 5000) } catch (e: IOException) { return Check.Unreachable(e.message ?: "No answer") }
+        if (page.code >= 500) return Check.Unreachable("The server answered HTTP ${page.code}")
+        val name = Model.serverName(base)
+        return Check.Ok(name, listOf(HomeApp(id = "web", name = name, url = base, icon = "web")), page.ms, false, https)
+    }
+
+    /** Fetches a picture (a tile icon). Null when it isn't there or isn't an image. */
+    suspend fun bytes(url: String, timeoutMs: Int = 6000, maxBytes: Int = 512 * 1024): ByteArray? = withContext(Dispatchers.IO) {
+        val c = try { URL(url).openConnection() as HttpURLConnection } catch (e: Exception) { return@withContext null }
+        try {
+            c.connectTimeout = timeoutMs
+            c.readTimeout = timeoutMs
+            if (c.responseCode != 200) return@withContext null
+            val out = java.io.ByteArrayOutputStream()
+            c.inputStream.use { input ->
+                val buf = ByteArray(8192)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                    if (out.size() > maxBytes) return@withContext null
+                }
+            }
+            out.toByteArray()
+        } catch (e: IOException) { null } finally { c.disconnect() }
     }
 }
 

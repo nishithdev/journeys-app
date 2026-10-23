@@ -1,6 +1,13 @@
 package app.homebase.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
+import app.homebase.TileIcons
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -103,6 +110,11 @@ fun StatusDot(color: Color, halo: Color) {
 /** An app's square icon: the server's color with a matching symbol, or its first letter. */
 @Composable
 fun AppIcon(app: HomeApp, size: Dp = 52.dp) {
+    val ctx = LocalContext.current
+    // A picture from the server (e.g. Life Quest's pixel trophy), drawn without smoothing so pixel art stays crisp.
+    val picture by produceState(initialValue = app.iconUrl.takeIf { it.isNotBlank() }?.let { TileIcons.cached(ctx, it) }, app.iconUrl) {
+        if (app.iconUrl.isNotBlank()) value = TileIcons.load(ctx, app.iconUrl)
+    }
     Box(
         Modifier.size(size).clip(RoundedCornerShape(size * 0.3f)).background(Color(app.color)),
         contentAlignment = Alignment.Center,
@@ -110,11 +122,18 @@ fun AppIcon(app: HomeApp, size: Dp = 52.dp) {
         val icon = when (app.icon) {
             "journeys" -> Icons.Filled.DateRange
             "home", "home-assistant" -> Icons.Filled.Home
-            "star" -> Icons.Filled.Star
+            "star", "quest" -> Icons.Filled.Star
             else -> null
         }
-        if (icon != null) Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(size * 0.54f))
-        else Text(app.name.take(1).uppercase(), color = Color.White, fontSize = (size.value * 0.42f).sp, fontWeight = FontWeight.ExtraBold)
+        val bmp = picture
+        when {
+            bmp != null -> Image(
+                bmp.asImageBitmap(), contentDescription = null, filterQuality = FilterQuality.None,
+                modifier = Modifier.size(size * 0.78f),
+            )
+            icon != null -> Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(size * 0.54f))
+            else -> Text(app.name.take(1).uppercase(), color = Color.White, fontSize = (size.value * 0.42f).sp, fontWeight = FontWeight.ExtraBold)
+        }
     }
 }
 

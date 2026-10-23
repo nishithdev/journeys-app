@@ -38,11 +38,22 @@ class ModelTest {
         assertEquals(0xFF2451D6, apps[0].color)
         assertEquals(2, apps[0].badge)
         assertTrue(apps[0].injectToken)
+        assertEquals("", apps[0].iconUrl)
         assertFalse(apps[1].injectToken)
     }
 
+    @Test fun iconUrlsResolveAgainstTheServer() {
+        val (_, apps) = Model.parseApps("http://alpha5:3000", """{"apps":[
+            {"name":"Life Quest","path":"/","iconUrl":"/api/homebase/icon.png"},
+            {"name":"Elsewhere","url":"http://alpha5:9000","iconUrl":"http://cdn.local/x.png"},
+            {"name":"Odd","url":"http://alpha5:9001","iconUrl":"javascript:alert(1)"}]}""")
+        assertEquals("http://alpha5:3000/api/homebase/icon.png", apps[0].iconUrl)
+        assertEquals("http://cdn.local/x.png", apps[1].iconUrl)
+        assertEquals("never anything but an http(s) address", "", apps[2].iconUrl)
+    }
+
     @Test fun storesAppsAndServersAsJson() {
-        val apps = listOf(HomeApp("a", "A", "http://a", 0xFF112233, "web", "sub", 3, true, true))
+        val apps = listOf(HomeApp("a", "A", "http://a", 0xFF112233, "web", "sub", 3, true, true, "http://a/i.png"))
         assertEquals(apps, Model.appsFromJson(Model.appsToJson(apps)))
         val servers = listOf(Server("http://alpha5:8080", "alpha5"))
         assertEquals(servers, Model.serversFromJson(Model.serversToJson(servers)))
