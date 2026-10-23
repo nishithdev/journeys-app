@@ -50,9 +50,14 @@ class Store(context: Context) {
     fun manualApps(serverUrl: String): List<HomeApp> = Model.appsFromJson(p.getString("manual:$serverUrl", null))
     fun saveManualApps(serverUrl: String, apps: List<HomeApp>) = p.edit().putString("manual:$serverUrl", Model.appsToJson(apps)).apply()
 
+    /** Found services you chose "Not now" for, so the launcher stops offering them. */
+    fun hiddenFound(serverUrl: String): Set<String> = p.getStringSet("hidden:$serverUrl", emptySet()) ?: emptySet()
+    fun hideFound(serverUrl: String, keys: Collection<String>) =
+        p.edit().putStringSet("hidden:$serverUrl", hiddenFound(serverUrl) + keys).apply()
+
     fun forget(serverUrl: String) {
         servers = servers.filter { it.url != serverUrl }
-        p.edit().remove("token:$serverUrl").remove("apps:$serverUrl").remove("manual:$serverUrl").apply()
+        p.edit().remove("token:$serverUrl").remove("apps:$serverUrl").remove("manual:$serverUrl").remove("hidden:$serverUrl").apply()
         if (currentUrl == serverUrl) currentUrl = servers.firstOrNull()?.url
     }
 }

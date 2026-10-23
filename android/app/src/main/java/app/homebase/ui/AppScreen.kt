@@ -13,6 +13,19 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -75,9 +88,13 @@ fun AppScreen(state: HomebaseState, activity: MainActivity, appId: String) {
         state.webViews.getOrPut(app.id) { createWebView(activity, state, app) }
     }
     // Progress and errors come from the WebView's clients; point them at this screen.
+    val hooks = web.tag as? Hooks
+    // Until the page has drawn something, show a loading screen in the app's colour instead of a blank WebView.
+    var shown by remember(web) { mutableStateOf(hooks?.shown ?: true) }
     remember(web) {
         (web.webChromeClient as? HomebaseChrome)?.onProgress = { progress = it }
-        (web.tag as? Hooks)?.onMainFrameError = { if (state.store.warnTailscale && state.link != Link.Connected) state.screen = Screen.Offline(app.id) }
+        hooks?.onMainFrameError = { if (state.store.warnTailscale && state.link != Link.Connected) state.screen = Screen.Offline(app.id) }
+        hooks?.onShown = { shown = true }
         true
     }
 
@@ -118,15 +135,79 @@ fun AppScreen(state: HomebaseState, activity: MainActivity, appId: String) {
         Box(Modifier.fillMaxWidth().height(3.dp).background(Ink)) {
             if (progress < 100) LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxSize(), color = Accent, trackColor = Color(0xFF2A2F3B))
         }
-        AndroidView(
-            factory = { (web.parent as? ViewGroup)?.removeView(web); web },
-            modifier = Modifier.weight(1f).fillMaxWidth().windowInsetsPadding(WindowInsets.navigationBars),
-        )
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            AndroidView(
+                factory = { (web.parent as? ViewGroup)?.removeView(web); web },
+                modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars),
+            )
+            Cover(visible = !shown, app = app, server = state.current?.name ?: "", onReload = { web.reload() }, onBack = { state.screen = Screen.Launcher })
+        }
     }
 }
 
 /** Callbacks a WebView reports to whichever screen is showing it. */
-private class Hooks { var onMainFrameError: () -> Unit = {} }
+private class Hooks {
+    var onMainFrameError: () -> Unit = {}
+    /** The page has drawn its first frame (it stays true for this WebView). */
+    var shown = false
+    var onShown: () -> Unit = {}
+}
+
+/** A line about the apps Homebase knows. */
+private fun aboutApp(app: HomeApp): String? = when {
+    app.icon == "journeys" || app.id == "journeys" -> "Your life journeys, step by step, with the days between each step."
+    app.icon == "quest" || app.id.contains("life-quest") -> "Your pixel skill tree for life. Finish a step to unlock the next."
+    app.icon == "home" || app.id.contains("home-assistant") -> "Your home's lights, sensors and automations."
+    else -> null
+}
+
+@Composable
+private fun Cover(visible: Boolean, app: HomeApp, server: String, onReload: () -> Unit, onBack: () -> Unit) {
+    AnimatedVisibility(visible = visible, enter = fadeIn(), exit = fadeOut(tween(260))) {
+        LoadingCover(app, server, onReload, onBack)
+    }
+}
+
+/** Fills the wait while an app's page loads: its icon, colour and latest summary, then a hint if it takes long. */
+@Composable
+private fun LoadingCover(app: HomeApp, server: String, onReload: () -> Unit, onBack: () -> Unit) {
+    var slow by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { delay(8_000); slow = true }
+    Column(
+        Modifier.fillMaxSize().background(Color(app.color)).clickable(enabled = false) {}.padding(32.dp)
+            .semantics { contentDescription = "Opening ${app.name}" },
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+    ) {
+        Box(Modifier.size(96.dp).clip(RoundedCornerShape(28.dp)).background(Color.White.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
+            AppIcon(app, size = 72.dp)
+        }
+        Text(app.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+        aboutApp(app)?.let { Text(it, color = Color.White.copy(alpha = 0.75f), fontSize = 14.sp, textAlign = TextAlign.Center, lineHeight = 20.sp) }
+        // Something to read while it loads: the app's own summary from the launcher tile.
+        if (app.subtitle.isNotBlank() || app.badge > 0) Column(
+            Modifier.clip(RoundedCornerShape(16.dp)).background(Color.White.copy(alpha = 0.12f)).padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (app.badge > 0) Text(
+                "${app.badge} thing${if (app.badge == 1) "" else "s"} waiting for you",
+                color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold,
+            )
+            if (app.subtitle.isNotBlank()) Text(app.subtitle, color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp, textAlign = TextAlign.Center)
+        }
+        LinearProgressIndicator(
+            modifier = Modifier.width(140.dp).height(4.dp).clip(RoundedCornerShape(2.dp)),
+            color = Color.White, trackColor = Color.White.copy(alpha = 0.2f),
+        )
+        Text(
+            if (slow) "Still loading. Your server is answering slowly, or Tailscale is reconnecting." else if (server.isNotBlank()) "Opening on $server" else "Opening",
+            color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp, textAlign = TextAlign.Center, lineHeight = 19.sp,
+        )
+        if (slow) Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            TextButton(onClick = onReload) { Text("Reload", color = Color.White, fontWeight = FontWeight.Bold) }
+            TextButton(onClick = onBack) { Text("Back to apps", color = Color.White, fontWeight = FontWeight.Bold) }
+        }
+    }
+}
 
 private class HomebaseChrome(private val activity: MainActivity) : WebChromeClient() {
     var onProgress: (Int) -> Unit = {}
@@ -157,7 +238,13 @@ private fun createWebView(activity: MainActivity, state: HomebaseState, app: Hom
             WebViewCompat.addDocumentStartJavaScript(web, Model.tokenScript(token), setOf(origin))
         }
     }
+    // Behind the page while it loads: the app's colour, never a white flash.
+    web.setBackgroundColor(app.color.toInt())
     web.webViewClient = object : WebViewClient() {
+        override fun onPageCommitVisible(view: WebView, url: String?) {
+            if (!hooks.shown) { hooks.shown = true; hooks.onShown() }
+        }
+
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val o = Model.origin(request.url.toString())
             if (o != null && o in inside) return false
@@ -174,6 +261,8 @@ private fun createWebView(activity: MainActivity, state: HomebaseState, app: Hom
 
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
             if (request.isForMainFrame) hooks.onMainFrameError()
+            // An error page is something to see: don't keep it hidden behind the cover.
+            if (request.isForMainFrame && !hooks.shown) { hooks.shown = true; hooks.onShown() }
         }
     }
     web.webChromeClient = HomebaseChrome(activity)

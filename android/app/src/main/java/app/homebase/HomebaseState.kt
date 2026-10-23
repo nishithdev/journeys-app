@@ -101,6 +101,7 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
             while (true) {
                 delay(30_000)
                 checkApps()
+                lookForNewApps()
             }
         }
     }
@@ -139,6 +140,29 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
     private fun addFound(f: Found) {
         found = (found.filter { sameKey(it.url) != sameKey(f.url) } + f)
             .sortedWith(compareBy<Found>({ !it.known }, { it.host }, { it.port }))
+    }
+
+    /** Services found running that aren't on the launcher yet (and you haven't hidden). */
+    val newFound: List<Found>
+        get() {
+            val s = current ?: return emptyList()
+            val have = apps.map { sameKey(it.url) }.toSet() + sameKey(s.url)
+            val hidden = store.hiddenFound(s.url)
+            return found.filter { sameKey(it.url) !in have && sameKey(it.url) !in hidden }
+        }
+    var hiddenTick by mutableStateOf(0) // bumps so the launcher re-reads [newFound] after hiding
+
+    fun hideFound(list: List<Found>) {
+        val s = current ?: return
+        store.hideFound(s.url, list.map { sameKey(it.url) })
+        hiddenTick++
+    }
+
+    /** On the launcher: look on the server's machine (and the Wi-Fi) for apps you could add. */
+    fun lookForNewApps(force: Boolean = false) {
+        val s = current ?: return
+        startLanDiscovery()
+        scanHost(Model.host(s.url), force)
     }
 
     /** Adds found services to the current server's launcher (skipping any that are already there). */

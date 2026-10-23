@@ -56,6 +56,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.homebase.AppStatus
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import app.homebase.Found
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.runtime.DisposableEffect
@@ -73,10 +77,14 @@ fun LauncherScreen(state: HomebaseState) {
     var adding by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<HomeApp?>(null) }
     // Keep the running dots fresh while the launcher is showing.
+    var reviewing by remember { mutableStateOf(false) }
     DisposableEffect(Unit) {
         state.startStatusLoop()
-        onDispose { state.stopStatusLoop() }
+        state.lookForNewApps() // apps running next to your server, offered below
+        onDispose { state.stopStatusLoop(); state.stopLanDiscovery() }
     }
+    @Suppress("UNUSED_VARIABLE") val tick = state.hiddenTick
+    val fresh = state.newFound
 
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 160.dp),
@@ -95,6 +103,9 @@ fun LauncherScreen(state: HomebaseState) {
             }
         }
         item(span = { GridItemSpan(maxLineSpan) }) { ServerChip(state) }
+        if (fresh.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
+            NewAppsBanner(fresh, host = state.current?.let { Model.host(it.url) } ?: "", onOpen = { reviewing = true })
+        }
         items(state.apps, key = { it.id }) { app ->
             AppTile(app, state.status[app.id] ?: AppStatus.Checking, onOpen = { state.openApp(app.id) }, onLongPress = { if (app.manual) removing = app })
         }
@@ -104,6 +115,15 @@ fun LauncherScreen(state: HomebaseState) {
         }
     }
 
+    if (reviewing) NewAppsSheet(
+        found = fresh,
+        onAdd = { state.addFoundApps(listOf(it)) },
+        onHide = { state.hideFound(listOf(it)) },
+        onAddAll = { state.addFoundApps(fresh); reviewing = false },
+        onNotNow = { state.hideFound(fresh); reviewing = false },
+        onDismiss = { reviewing = false },
+    )
+    if (reviewing && fresh.isEmpty()) reviewing = false
     if (adding) {
         val host = state.current?.let { Model.host(it.url) }
         LaunchedEffect(Unit) { host?.let { state.scanHost(it) } }
@@ -125,6 +145,62 @@ fun LauncherScreen(state: HomebaseState) {
             confirmButton = { TextButton(onClick = { state.removeManualApp(app.id); removing = null }) { Text("Remove") } },
             dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } },
         )
+    }
+}
+
+/** "2 new apps found on alpha5": tap to see them and add with one tap. */
+@Composable
+private fun NewAppsBanner(found: List<Found>, host: String, onOpen: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color(0xFFE9EDFF)).border(1.dp, Color(0xFFC9D3FF), RoundedCornerShape(18.dp))
+            .clickable(onClickLabel = "See new apps", onClick = onOpen).padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(Modifier.size(36.dp).clip(CircleShape).background(Accent), contentAlignment = Alignment.Center) {
+            Text("${found.size}", color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                if (found.size == 1) "New app found" else "${found.size} new apps found",
+                fontWeight = FontWeight.Bold, fontSize = 15.sp,
+            )
+            Text(
+                found.take(3).joinToString(", ") { it.name } + if (host.isNotBlank()) " · running on $host and nearby" else "",
+                color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text("Review", color = Accent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+    }
+}
+
+/** The menu of found apps: add one, hide one, or add them all. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NewAppsSheet(
+    found: List<Found>,
+    onAdd: (Found) -> Unit,
+    onHide: (Found) -> Unit,
+    onAddAll: () -> Unit,
+    onNotNow: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Ground) {
+        Column(Modifier.padding(horizontal = 22.dp).padding(bottom = 24.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text("New apps found", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+            Text("These are running next to your server. Add one to open it from Homebase, with its live status.", color = Muted, fontSize = 14.sp, lineHeight = 20.sp)
+            Panel(padding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
+                found.forEach { f ->
+                    FoundRow(f, onClick = { onAdd(f) }) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = { onAdd(f) }) { Text("Add", fontWeight = FontWeight.Bold, color = Accent) }
+                            IconButton(onClick = { onHide(f) }) { Icon(Icons.Filled.Close, contentDescription = "Hide ${f.name}", tint = Faint) }
+                        }
+                    }
+                }
+            }
+            if (found.size > 1) PrimaryButton("Add all ${found.size}", onClick = onAddAll)
+            SecondaryButton("Not now", onClick = onNotNow)
+        }
     }
 }
 

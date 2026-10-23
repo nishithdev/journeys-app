@@ -1,7 +1,12 @@
 <resources>
+    <!-- The window you see while Homebase starts is dark (like an open app's top bar),
+         with white status bar icons, so the top of the screen is never a blank white strip.
+         The screens then pick light or dark icons for themselves (HomebaseRoot). -->
     <style name="Theme.Homebase" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">@color/ground</item>
+        <item name="android:windowBackground">@color/ink</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>
