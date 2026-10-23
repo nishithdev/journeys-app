@@ -1,0 +1,58 @@
+# Homebase for Android
+
+A launcher for your homelab. Homebase has no apps of its own: you give it your server's address, it asks the server which apps it hosts, and it opens them inside the Android app. It works like the Home Assistant companion app.
+
+v1 relies on the **Tailscale app** for the connection. Turn Tailscale on, and Homebase reaches anything on your tailnet.
+
+## Install
+
+1. Get the APK: download `homebase.apk` from the chat, or build it yourself (see below).
+2. Copy it to the phone and open it. Allow "Install unknown apps" for your file manager when Android asks.
+3. Open Homebase, enter the server address (e.g. `http://alpha5.your-tailnet.ts.net:8080`), then the `APP_TOKEN` if the server asks for one.
+
+You can also set it up from a link: `homebase://connect?url=http://alpha5:8080`. Tokens are never put in links.
+
+## What the server tells it
+
+Homebase calls `GET /api/homebase` (behind `APP_TOKEN`). The Journeys server answers with:
+
+- **Journeys**, with today's summary ("1 waiting · 1 habit left") and a badge
+- **Home Assistant**, when `HA_URL` is set
+- anything in `HOMEBASE_APPS`
+
+Optional `.env` settings:
+
+```
+# Extra tiles in the launcher: Name=url, comma separated
+HOMEBASE_APPS=Jellyfin=http://alpha5:8096,Grafana=http://alpha5:3000
+# Name shown at the top of the launcher (defaults to the host name)
+SERVER_NAME=alpha5
+```
+
+An older server without `/api/homebase` still works; Homebase shows Journeys on its own. Any other web server shows up as a single app.
+
+## Security
+
+- The access token is encrypted with an Android Keystore key (AES-GCM). It is handed to Journeys at page start, only on the server's own origin, and never logged.
+- Optional fingerprint / screen-lock unlock, which locks again after 5 minutes away.
+- Plain http is allowed because tailnet traffic is already encrypted by WireGuard.
+- Links to other sites open in your browser, not inside Homebase.
+
+## Build
+
+Needs JDK 17+ and the Android SDK (platform 35).
+
+```
+cd android
+echo "sdk.dir=$ANDROID_HOME" > local.properties
+./gradlew assembleDebug         # app/build/outputs/apk/debug/app-debug.apk
+./gradlew testDebugUnitTest     # Robolectric tests, no emulator needed
+```
+
+`assembleRelease` builds a minified APK. It is signed with the debug key for now; add your own signing config before you publish it anywhere.
+
+NetTest runs against a live server only when you set `HOMEBASE_TEST_SERVER`, `HOMEBASE_TEST_TOKEN` and `HOMEBASE_TEST_OPEN_SERVER`; otherwise those tests are skipped.
+
+## Not in v1
+
+QR setup, push notifications, live updates, and a built-in Tailscale connection (tsnet).

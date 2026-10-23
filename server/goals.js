@@ -654,7 +654,10 @@ function init(x) {
     ];
   }
 
-  return { enabled, handle, addon, start, mcpTools, apply, summary };
+  // Today's habit numbers for other screens (the Homebase launcher's badge). Null while the add-on is off.
+  async function todaySummary() { return enabled() ? summary(await current()) : null; }
+
+  return { enabled, handle, addon, start, mcpTools, apply, summary, todaySummary };
 }
 
 module.exports = { settings, init };

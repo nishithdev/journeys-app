@@ -17,6 +17,8 @@
  *   NUDGE_AFTER_DAYS                days on one step before a nudge, when there's no history (default 7)
  *   NUDGE_REPEAT_DAYS               days before nudging about the same step again (default 3)
  *   GOALS_ENABLED                   turn on the Goals & habits add-on (default off; also a switch in Settings)
+ *   HOMEBASE_APPS                   more apps for the Homebase Android app's launcher: "Immich=http://alpha5:2283,Grafana=http://alpha5:3000"
+ *   SERVER_NAME                     the name Homebase shows for this server (default: from its address)
  *   CHECKIN_HOUR, GOAL_STALL_DAYS   Goals & habits: evening check-in hour (21), days before a goal counts as stalled (14)
  *
  * Other: PORT (default 8080), DATA_DIR (default /data),
@@ -633,6 +635,37 @@ function startNudgeSchedule() {
   setTimeout(tick, Math.min(5000, NUDGE_CHECK_MS)).unref();
 }
 
+// ---------- Homebase (the Android app): which apps this server offers ----------
+const HOMEBASE_APPS = parseHomebaseApps(process.env.HOMEBASE_APPS || '');
+function parseHomebaseApps(raw) {
+  return raw.split(',').map((x) => x.trim()).filter(Boolean).map((x, i) => {
+    const eq = x.indexOf('=');
+    const name = eq > 0 ? x.slice(0, eq).trim() : '';
+    const url = eq > 0 ? x.slice(eq + 1).trim() : x;
+    try { const u = new URL(url); if (!/^https?:$/.test(u.protocol)) throw new Error(); } catch (e) { console.warn(`Ignoring HOMEBASE_APPS entry "${x}": not an http(s) address`); return null; }
+    return { id: `extra-${i}`, name: name || new URL(url).hostname, url, color: '#5B6274', icon: '', subtitle: new URL(url).host };
+  }).filter(Boolean);
+}
+async function homebaseApps() {
+  let subtitle = '', badge = 0;
+  try {
+    await ensureSetup();
+    const s = haSummary(await readCached(60 * 1000));
+    let habitsLeft = 0;
+    try { const g = await goals.todaySummary(); if (g) habitsLeft = g.habits_due; } catch (e) { /* goals unavailable: skip its part */ }
+    const parts = [s.waiting ? `${s.waiting} waiting` : plural(s.active, 'journey') + ' in progress'];
+    if (habitsLeft) parts.push(`${plural(habitsLeft, 'habit')} left`);
+    subtitle = parts.join(' · ');
+    badge = s.waiting + habitsLeft;
+  } catch (e) { /* Sheet not reachable right now: still list the apps */ }
+  const apps = [{ id: 'journeys', name: 'Journeys', path: '/', color: '#2451D6', icon: 'journeys', subtitle, badge, token: true }];
+  if (conf.haUrl) apps.push({ id: 'home-assistant', name: 'Home Assistant', url: conf.haUrl, color: '#18BCF2', icon: 'home', subtitle: new URL(conf.haUrl).host });
+  apps.push(...HOMEBASE_APPS);
+  const out = { apps };
+  if (process.env.SERVER_NAME) out.server = { name: process.env.SERVER_NAME.trim() };
+  return out;
+}
+
 // ---------- settings API ----------
 function settingsView(saved) {
   let serviceAccountEmail = null, keyProblem = null;
@@ -780,6 +813,8 @@ const server = http.createServer(async (req, res) => {
       if (route === 'POST /api/ha/action') return sendJson(res, 200, { ok: true, payload: await haAction(await readJson(req)) });
       if (route === 'POST /api/ha/check') return sendJson(res, 200, { ok: true, payload: await runNudges() });
       if (route === 'GET /api/settings') return sendJson(res, 200, { ok: true, payload: settingsView() });
+      // The Homebase Android app's launcher: apps on this server, with Journeys' badge. Plain JSON, no wrapper.
+      if (route === 'GET /api/homebase') return sendJson(res, 200, await homebaseApps());
       if (route === 'POST /api/settings') return sendJson(res, 200, { ok: true, payload: await saveSettings(await readJson(req)) });
       if (pathname === '/api/goals' || pathname.startsWith('/api/goals/')) return await goals.handle(route, req, res, { readJson, sendJson });
       if (route === 'POST /api/ha/test') {
