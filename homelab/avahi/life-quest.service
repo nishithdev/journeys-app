@@ -1,0 +1,13 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!-- Announces Life Quest on your Wi-Fi so the Homebase app finds it (like Home Assistant).
+     Copy to /etc/avahi/services/ on the Pi; Avahi picks it up by itself. -->
+<service-group>
+  <name replace-wildcards="yes">Life Quest on %h</name>
+  <service>
+    <type>_homebase._tcp</type>
+    <port>3000</port>
+    <txt-record>app=life-quest</txt-record>
+    <txt-record>name=Life Quest</txt-record>
+  </service>
+</service-group>

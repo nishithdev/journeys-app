@@ -48,6 +48,12 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.homebase.HomebaseState
+import androidx.compose.material3.Checkbox
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.semantics.Role
+import kotlinx.coroutines.delay
 import app.homebase.Model
 import app.homebase.Net
 import app.homebase.Screen
@@ -61,6 +67,19 @@ fun SetupScreen(state: HomebaseState, prefill: String) {
     val vpn = remember { Tailscale.vpnOn(ctx) }
     val installed = remember { Tailscale.installed(ctx) }
     BackHandler(enabled = state.current != null) { state.screen = Screen.Launcher }
+    // Look for services: announced on this Wi-Fi, and on the hosts of servers you've saved.
+    DisposableEffect(Unit) {
+        state.startLanDiscovery()
+        state.scanKnownHosts()
+        onDispose { state.stopLanDiscovery() }
+    }
+    // Typing a name like "alpha5" checks that machine's common ports.
+    LaunchedEffect(url) {
+        delay(700)
+        val n = Model.normalizeUrl(url) ?: return@LaunchedEffect
+        val host = Model.host(n)
+        if (host.length >= 2) state.scanHost(host)
+    }
 
     ScreenColumn(Modifier.windowInsetsPadding(WindowInsets.safeDrawing).imePadding().verticalScroll(rememberScrollState())) {
         Spacer(Modifier.height(24.dp))
@@ -98,6 +117,16 @@ fun SetupScreen(state: HomebaseState, prefill: String) {
                 }
             }
         }
+        FoundPanel(
+            title = "Found on your network",
+            items = state.found,
+            scanning = state.scanning > 0,
+            empty = "Nothing found yet. Type your server's name, like alpha5, and Homebase checks its usual ports (8080, 3000, 8123…).",
+            onRescan = {
+                state.scanKnownHosts(force = true)
+                Model.normalizeUrl(url)?.let { state.scanHost(Model.host(it), force = true) }
+            },
+        ) { f -> FoundRow(f, onClick = { state.startCheck(f.url) }) }
         Spacer(Modifier.weight(1f))
         PrimaryButton("Connect", onClick = { connect(state, url) { error = it } })
         Spacer(Modifier.height(16.dp))
@@ -139,14 +168,38 @@ fun CheckScreen(state: HomebaseState, url: String) {
 
         when (r) {
             is Net.Check.Ok -> {
+                val host = Model.host(url)
+                LaunchedEffect(url) { state.scanHost(host) }
+                val listed = r.apps.map { HomebaseState.sameKey(it.url) }.toSet() + HomebaseState.sameKey(url)
+                val also = state.found.filter { it.host == host && HomebaseState.sameKey(it.url) !in listed }
+                val picked = remember(url) { mutableStateMapOf<String, Boolean>() }
                 Panel(padding = androidx.compose.foundation.layout.PaddingValues(vertical = 6.dp, horizontal = 16.dp)) {
                     CheckRow(true, "Reached your server", "Answered in ${r.ms} ms.")
                     if (state.checkToken.isNotBlank()) CheckRow(true, "Access token accepted", "Saved in Android's secure storage, not in the web page.")
                     CheckRow(true, "Found ${r.apps.size} app${if (r.apps.size == 1) "" else "s"}", r.apps.joinToString(", ") { it.name })
                     if (!r.https) CheckRow(false, "Plain http", "Fine inside your tailnet, which is encrypted. Set up HTTPS later to install apps offline.")
                 }
+                if (also.isNotEmpty() || state.scanning > 0) FoundPanel(
+                    title = "Also running on $host",
+                    items = also,
+                    scanning = state.scanning > 0,
+                    empty = "Nothing else answered on the usual ports.",
+                    onRescan = { state.scanHost(host, force = true) },
+                ) { f ->
+                    val on = picked[f.url] ?: f.known
+                    FoundRow(f, onClick = { picked[f.url] = !on }, role = Role.Checkbox) {
+                        Checkbox(checked = on, onCheckedChange = { picked[f.url] = it })
+                    }
+                }
                 Spacer(Modifier.weight(1f))
-                PrimaryButton("Continue", onClick = { state.saveServer(url, r) })
+                PrimaryButton(
+                    if (also.count { picked[it.url] ?: it.known } > 0) "Continue with ${r.apps.size + also.count { picked[it.url] ?: it.known }} apps" else "Continue",
+                    onClick = {
+                        val add = also.filter { picked[it.url] ?: it.known }
+                        state.saveServer(url, r)
+                        state.addFoundApps(add)
+                    },
+                )
             }
             Net.Check.NeedsToken, Net.Check.BadToken -> {
                 Text(

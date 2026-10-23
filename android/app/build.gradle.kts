@@ -12,8 +12,8 @@ android {
         applicationId = "app.homebase"
         minSdk = 28
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.2"
+        versionCode = 4
+        versionName = "1.0.3"
     }
 
     buildTypes {
@@ -42,6 +42,7 @@ android {
                 it.systemProperty("homebase.token", System.getenv("HOMEBASE_TEST_TOKEN") ?: "")
                 it.systemProperty("homebase.openServer", System.getenv("HOMEBASE_TEST_OPEN_SERVER") ?: "")
                 it.systemProperty("homebase.waitFor", System.getenv("HOMEBASE_TEST_WAIT_FOR") ?: "waiting")
+                it.systemProperty("homebase.discoveryHost", System.getenv("HOMEBASE_TEST_DISCOVERY_HOST") ?: "")
             }
         }
     }

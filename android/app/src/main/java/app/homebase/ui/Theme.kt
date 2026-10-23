@@ -96,8 +96,8 @@ fun Panel(modifier: Modifier = Modifier, padding: PaddingValues = PaddingValues(
 }
 
 @Composable
-fun SectionLabel(text: String) {
-    Text(text.uppercase(), fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = Faint, letterSpacing = 0.7.sp)
+fun SectionLabel(text: String, modifier: Modifier = Modifier) {
+    Text(text.uppercase(), modifier = modifier, fontSize = 12.sp, fontWeight = FontWeight.ExtraBold, color = Faint, letterSpacing = 0.7.sp)
 }
 
 @Composable

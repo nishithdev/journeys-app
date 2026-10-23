@@ -55,7 +55,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.homebase.AppStatus
+import app.homebase.Found
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.runtime.DisposableEffect
 import app.homebase.HomeApp
+import app.homebase.Model
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.LaunchedEffect
 import app.homebase.HomebaseState
 import app.homebase.Link
 import app.homebase.Screen
@@ -64,6 +72,11 @@ import app.homebase.Screen
 fun LauncherScreen(state: HomebaseState) {
     var adding by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<HomeApp?>(null) }
+    // Keep the running dots fresh while the launcher is showing.
+    DisposableEffect(Unit) {
+        state.startStatusLoop()
+        onDispose { state.stopStatusLoop() }
+    }
 
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 160.dp),
@@ -83,7 +96,7 @@ fun LauncherScreen(state: HomebaseState) {
         }
         item(span = { GridItemSpan(maxLineSpan) }) { ServerChip(state) }
         items(state.apps, key = { it.id }) { app ->
-            AppTile(app, onOpen = { state.openApp(app.id) }, onLongPress = { if (app.manual) removing = app })
+            AppTile(app, state.status[app.id] ?: AppStatus.Checking, onOpen = { state.openApp(app.id) }, onLongPress = { if (app.manual) removing = app })
         }
         item { AddTile { adding = true } }
         if (state.apps.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
@@ -91,7 +104,19 @@ fun LauncherScreen(state: HomebaseState) {
         }
     }
 
-    if (adding) AddAppDialog(onDismiss = { adding = false }, onAdd = { name, url -> state.addManualApp(name, url).also { if (it) adding = false } })
+    if (adding) {
+        val host = state.current?.let { Model.host(it.url) }
+        LaunchedEffect(Unit) { host?.let { state.scanHost(it) } }
+        val have = state.apps.map { HomebaseState.sameKey(it.url) }.toSet()
+        AddAppDialog(
+            host = host,
+            found = state.found.filter { HomebaseState.sameKey(it.url) !in have },
+            scanning = state.scanning > 0,
+            onPick = { state.addFoundApps(listOf(it)); adding = false },
+            onDismiss = { adding = false },
+            onAdd = { name, url -> state.addManualApp(name, url).also { if (it) adding = false } },
+        )
+    }
     removing?.let { app ->
         AlertDialog(
             onDismissRequest = { removing = null },
@@ -145,10 +170,16 @@ private fun ServerChip(state: HomebaseState) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AppTile(app: HomeApp, onOpen: () -> Unit, onLongPress: () -> Unit) {
+private fun AppTile(app: HomeApp, status: AppStatus, onOpen: () -> Unit, onLongPress: () -> Unit) {
+    val (dot, said) = when (status) {
+        AppStatus.Up -> Good to "Running"
+        AppStatus.Down -> Bad to "Not responding"
+        AppStatus.Checking -> Faint to "Checking"
+    }
     Column(
         Modifier.heightIn(min = 150.dp).clip(RoundedCornerShape(22.dp)).background(Color.White).border(1.dp, Line, RoundedCornerShape(22.dp))
             .combinedClickable(onClick = onOpen, onLongClick = onLongPress, onClickLabel = "Open ${app.name}")
+            .semantics(mergeDescendants = true) { stateDescription = said }
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
@@ -161,7 +192,13 @@ private fun AppTile(app: HomeApp, onOpen: () -> Unit, onLongPress: () -> Unit) {
         }
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(app.name, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(app.subtitle.ifBlank { app.url.substringAfter("://") }, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Box(Modifier.padding(top = 4.dp).size(8.dp).clip(CircleShape).background(dot))
+                Text(
+                    if (status == AppStatus.Down) "Not responding" else app.subtitle.ifBlank { app.url.substringAfter("://").trimEnd('/') },
+                    color = if (status == AppStatus.Down) Bad else Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -190,7 +227,14 @@ private fun AddTile(onClick: () -> Unit) {
 }
 
 @Composable
-private fun AddAppDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Boolean) {
+private fun AddAppDialog(
+    host: String?,
+    found: List<Found>,
+    scanning: Boolean,
+    onPick: (Found) -> Unit,
+    onDismiss: () -> Unit,
+    onAdd: (String, String) -> Boolean,
+) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("http://") }
     var error by remember { mutableStateOf(false) }
@@ -198,7 +242,13 @@ private fun AddAppDialog(onDismiss: () -> Unit, onAdd: (String, String) -> Boole
         onDismissRequest = onDismiss,
         title = { Text("Add an app") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (found.isNotEmpty() || scanning) {
+                    SectionLabel(if (host != null) "Running on $host and nearby" else "Found on your network")
+                    if (found.isEmpty()) Text("Looking…", color = Muted, fontSize = 13.sp)
+                    found.forEach { f -> FoundRow(f, onClick = { onPick(f) }) }
+                    SectionLabel("Or type an address")
+                }
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(
                     value = url, onValueChange = { url = it; error = false }, label = { Text("Address") }, singleLine = true, isError = error,
