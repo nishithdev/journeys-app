@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
@@ -41,7 +42,10 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // Homebase is always light, so ask for dark status bar icons even when the phone is in dark mode.
+        // HomebaseRoot switches them per screen (white icons over the dark bar of an open app).
+        val clear = android.graphics.Color.TRANSPARENT
+        enableEdgeToEdge(statusBarStyle = SystemBarStyle.light(clear, clear), navigationBarStyle = SystemBarStyle.light(clear, clear))
         state = HomebaseState(Store(this), applicationContext, lifecycleScope)
         handleIntent(intent)
         setContent { HomebaseTheme { HomebaseRoot(state, this) } }

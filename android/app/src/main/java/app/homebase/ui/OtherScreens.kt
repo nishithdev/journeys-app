@@ -56,6 +56,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.homebase.BuildConfig
 import app.homebase.HomebaseState
+import androidx.compose.runtime.SideEffect
+import androidx.core.view.WindowCompat
 import app.homebase.Link
 import app.homebase.MainActivity
 import app.homebase.Screen
@@ -63,6 +65,15 @@ import app.homebase.Tailscale
 
 @Composable
 fun HomebaseRoot(state: HomebaseState, activity: MainActivity) {
+    // Status bar icons: dark on the light screens, white over the dark top bar of an open app and the lock screen.
+    val darkTop = state.locked || state.screen is Screen.App
+    val darkBottom = state.locked
+    SideEffect {
+        WindowCompat.getInsetsController(activity.window, activity.window.decorView).apply {
+            isAppearanceLightStatusBars = !darkTop
+            isAppearanceLightNavigationBars = !darkBottom
+        }
+    }
     Box(Modifier.fillMaxSize().background(Ground)) {
         when (val s = state.screen) {
             is Screen.Setup -> SetupScreen(state, s.prefill)
