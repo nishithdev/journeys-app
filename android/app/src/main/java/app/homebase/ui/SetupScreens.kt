@@ -170,8 +170,8 @@ fun CheckScreen(state: HomebaseState, url: String) {
             is Net.Check.Ok -> {
                 val host = Model.host(url)
                 LaunchedEffect(url) { state.scanHost(host) }
-                val listed = r.apps.map { HomebaseState.sameKey(it.url) }.toSet() + HomebaseState.sameKey(url)
-                val also = state.found.filter { it.host == host && HomebaseState.sameKey(it.url) !in listed }
+                val listed = (r.apps.map { it.url } + url).flatMap { state.aliases(it) }.toSet()
+                val also = state.found.filter { f -> host in f.hosts && f.urls.none { HomebaseState.sameKey(it) in listed } }
                 val picked = remember(url) { mutableStateMapOf<String, Boolean>() }
                 Panel(padding = androidx.compose.foundation.layout.PaddingValues(vertical = 6.dp, horizontal = 16.dp)) {
                     CheckRow(true, "Reached your server", "Answered in ${r.ms} ms.")

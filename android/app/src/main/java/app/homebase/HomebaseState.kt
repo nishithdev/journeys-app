@@ -74,8 +74,15 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
     /** The server's own list first; an app you added that the server also lists is shown once. */
     private fun allApps(url: String): List<HomeApp> {
         val listed = store.cachedApps(url)
-        val keys = listed.map { sameKey(it.url) }.toSet()
-        return listed + store.manualApps(url).filter { sameKey(it.url) !in keys }
+        val out = listed.toMutableList()
+        val seen = listed.flatMap { aliases(it.url) }.toMutableSet()
+        for (m in store.manualApps(url)) {
+            // The same app reached another way (Wi-Fi IP vs Tailscale name) is shown once.
+            if (aliases(m.url).any { it in seen }) continue
+            out += m
+            seen += aliases(m.url)
+        }
+        return out
     }
 
     /** Checks every app on the launcher at once and marks it running (green) or not responding (red). */
@@ -122,7 +129,7 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
     fun stopLanDiscovery() { lan?.stop(); lan = null }
 
     /** Checks the usual ports on [host]. Skipped if it was checked in the last 30 seconds, unless [force]. */
-    fun scanHost(host: String, force: Boolean = false) {
+    fun scanHost(host: String, force: Boolean = false, ports: List<Int> = Probe.PORTS) {
         val h = host.trim().lowercase()
         if (h.isEmpty()) return
         val now = SystemClock.elapsedRealtime()
@@ -130,31 +137,42 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
         scannedAt[h] = now
         scanning++
         scope.launch {
-            try { Probe.host(h).forEach(::addFound) } finally { scanning-- }
+            try { Probe.host(h, ports).forEach(::addFound) } finally { scanning-- }
         }
     }
 
     /** The hosts of the servers you've saved. */
     fun scanKnownHosts(force: Boolean = false) = servers.map { Model.host(it.url) }.distinct().forEach { scanHost(it, force) }
 
+    /** Adds (or merges) a found service: the same install at two addresses is one entry. */
     private fun addFound(f: Found) {
-        found = (found.filter { sameKey(it.url) != sameKey(f.url) } + f)
-            .sortedWith(compareBy<Found>({ !it.known }, { it.host }, { it.port }))
+        val keys = f.urls.map(::sameKey).toSet()
+        val same = found.filter { it.identity == f.identity || it.urls.any { u -> sameKey(u) in keys } }
+        val merged = same.fold(f) { acc, x -> Unify.merge(acc, x) }
+        found = (found - same.toSet() + merged).sortedWith(compareBy<Found>({ !it.known }, { it.host }, { it.port }))
+        current?.let { apps = allApps(it.url) } // a tile that turned out to be a duplicate goes away
+    }
+
+    /** All the addresses known for the service at [url] (itself, plus any other address it was found at). */
+    fun aliases(url: String): Set<String> {
+        val k = sameKey(url)
+        val f = found.firstOrNull { e -> e.urls.any { sameKey(it) == k } } ?: return setOf(k)
+        return f.urls.map(::sameKey).toSet()
     }
 
     /** Services found running that aren't on the launcher yet (and you haven't hidden). */
     val newFound: List<Found>
         get() {
             val s = current ?: return emptyList()
-            val have = apps.map { sameKey(it.url) }.toSet() + sameKey(s.url)
+            val have = (apps.map { it.url } + s.url).flatMap { aliases(it) }.toSet()
             val hidden = store.hiddenFound(s.url)
-            return found.filter { sameKey(it.url) !in have && sameKey(it.url) !in hidden }
+            return found.filter { f -> f.urls.none { sameKey(it) in have } && f.identity !in hidden && sameKey(f.url) !in hidden }
         }
     var hiddenTick by mutableStateOf(0) // bumps so the launcher re-reads [newFound] after hiding
 
     fun hideFound(list: List<Found>) {
         val s = current ?: return
-        store.hideFound(s.url, list.map { sameKey(it.url) })
+        store.hideFound(s.url, list.map { it.identity })
         hiddenTick++
     }
 
@@ -168,8 +186,8 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
     /** Adds found services to the current server's launcher (skipping any that are already there). */
     fun addFoundApps(list: List<Found>) {
         val s = current ?: return
-        val have = (store.cachedApps(s.url) + store.manualApps(s.url)).map { sameKey(it.url) }.toSet()
-        val add = list.filter { sameKey(it.url) !in have }.map { it.toApp() }
+        val have = (store.cachedApps(s.url) + store.manualApps(s.url)).flatMap { aliases(it.url) }.toSet()
+        val add = list.filter { f -> f.urls.none { sameKey(it) in have } }.distinctBy { it.identity }.map { it.toApp() }
         if (add.isEmpty()) return
         store.saveManualApps(s.url, store.manualApps(s.url) + add)
         apps = allApps(s.url)

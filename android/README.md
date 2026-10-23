@@ -44,6 +44,8 @@ You can also add any such app as a server of its own in Homebase (`http://alpha5
   ```
   Avahi (already on Raspberry Pi OS, it's what makes `alpha5.local` work) picks them up by itself. This only works on the same network as the Pi, not over Tailscale.
 
+**One entry per app, wherever it's found.** The same Pi can show up twice: by its Wi-Fi IP (found on the network) and by its Tailscale name. Journeys and Life Quest report an install ID in `/api/health` (`instance`), so Homebase merges them into one entry, keeps the Tailscale address (it works at home and away) and lists the other as "also 192.168.x.x". Apps without an ID, like Home Assistant, are merged when the name and port match. Tiles you already added twice this way are shown once.
+
 **After connecting**, the next screen lists what else runs on the same machine ("Also running on alpha5"), with Homebase-aware apps like Life Quest ticked. Continue adds them to the launcher, and their tiles stay live (Life Quest's level, badge and icon). **+ Add an app** on the launcher shows the same list.
 
 **On the launcher**, every tile has a dot: green when the app answers, red with "Not responding" when it doesn't, grey while checking. Homebase checks when you open it, when you come back to it, and every 30 seconds while the launcher is showing.

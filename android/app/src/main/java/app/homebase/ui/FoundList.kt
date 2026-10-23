@@ -22,9 +22,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.homebase.Found
+import app.homebase.Model
 
-/** "alpha5 · port 3000" */
-fun Found.where(): String = "$host · port $port"
+/** "alpha5 · port 3000 · also 192.168.1.20" */
+fun Found.where(): String {
+    val also = alts.map { Model.host(it) }.filter { it != host }.distinct()
+    return "$host · port $port" + if (also.isNotEmpty()) " · also ${also.joinToString()}" else ""
+}
 
 /** One found service: its icon, name, where it runs, and what it is. */
 @Composable

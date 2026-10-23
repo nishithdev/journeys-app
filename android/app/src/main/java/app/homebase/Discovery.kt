@@ -25,7 +25,25 @@ data class Found(
     val iconUrl: String = "",
     val color: Long = 0xFF5B6274,
     val icon: String = "web",
+    /** The install's own ID (Journeys and Life Quest report one), the same at every address. */
+    val instance: String = "",
+    /** Other addresses where this same service answers (e.g. its Wi-Fi IP when [url] is its Tailscale name). */
+    val alts: List<String> = emptyList(),
 ) {
+    /** Every address this entry stands for. */
+    val urls: List<String> get() = listOf(url) + alts
+    val hosts: List<String> get() = urls.map { Model.host(it) }.distinct()
+
+    /**
+     * What makes two entries the same service: its install ID when it has one; otherwise the same named app on the
+     * same port (Home Assistant at alpha5:8123 and 192.168.1.20:8123). Unnamed pages are only the same at the same address.
+     */
+    val identity: String get() = when {
+        instance.isNotBlank() -> "id:$instance"
+        kind != "web" || (name.isNotBlank() && name != "Web app") -> "name:${name.lowercase()}:$port"
+        else -> "url:${HomebaseState.sameKey(url)}"
+    }
+
     val host: String get() = Model.host(url)
     val port: Int get() = try { URL(url).let { if (it.port > 0) it.port else it.defaultPort } } catch (e: Exception) { -1 }
     /** Knows about Homebase (or is Home Assistant): worth adding without asking twice. */
@@ -35,6 +53,39 @@ data class Found(
         id = "found-${host}-$port", name = name, url = url, color = color, icon = icon,
         subtitle = subtitle, iconUrl = iconUrl, manual = true,
     )
+}
+
+/** One service seen at two addresses becomes one entry. */
+object Unify {
+    private val TAILNET_IP = Regex("^100\\.(6[4-9]|[7-9]\\d|1[01]\\d|12[0-7])\\.\\d+\\.\\d+$")
+    private val PRIVATE_IP = Regex("^(10\\.|192\\.168\\.|172\\.(1[6-9]|2\\d|3[01])\\.|169\\.254\\.).*")
+
+    /**
+     * How good an address is to keep: 0 works at home and away (Tailscale name or 100.x IP),
+     * 1 any other name or IP, 2 only on the home network (Wi-Fi IP, .local name).
+     */
+    fun reach(url: String): Int {
+        val h = Model.host(url).lowercase().trim('[', ']')
+        return when {
+            h.endsWith(".ts.net") || TAILNET_IP.matches(h) -> 0
+            h.endsWith(".local") || PRIVATE_IP.matches(h) || h.contains(':') -> 2
+            !h.contains('.') -> 0 // a MagicDNS short name like "alpha5"
+            else -> 1
+        }
+    }
+
+    /** Keeps the better address as the main one and the rest as alternatives; fills in what either side knows. */
+    fun merge(a: Found, b: Found): Found {
+        val (main, other) = if (reach(b.url) < reach(a.url)) b to a else a to b
+        val alts = (main.alts + other.urls).filter { HomebaseState.sameKey(it) != HomebaseState.sameKey(main.url) }
+            .distinctBy { HomebaseState.sameKey(it) }
+        return main.copy(
+            alts = alts,
+            instance = main.instance.ifBlank { other.instance },
+            subtitle = main.subtitle.ifBlank { other.subtitle },
+            iconUrl = main.iconUrl.ifBlank { other.iconUrl },
+        )
+    }
 }
 
 /** Looks at one address, or at the usual homelab ports on a host, and says what's running there. */
@@ -90,19 +141,19 @@ object Probe {
         when (info?.optString("app")) {
             "journeys" -> return Found(
                 "$base/", "Journeys", "journeys", if (info.optBoolean("authRequired")) "Needs your access token" else "",
-                color = 0xFF2451D6, icon = "journeys",
+                color = 0xFF2451D6, icon = "journeys", instance = info.optString("instance"),
             )
             "life-quest" -> {
                 val list = fetch("$base/api/homebase", timeoutMs, 16 * 1024)
                 val app = if (list?.code == 200) runCatching { Model.parseApps(base, list.body).second.firstOrNull() }.getOrNull() else null
-                return Found("$base/", app?.name ?: "Life Quest", "life-quest", app?.subtitle ?: "", app?.iconUrl ?: "", app?.color ?: 0xFF14151F, "quest")
+                return Found("$base/", app?.name ?: "Life Quest", "life-quest", app?.subtitle ?: "", app?.iconUrl ?: "", app?.color ?: 0xFF14151F, "quest", info.optString("instance"))
             }
         }
         // Anything else that answers: an app that lists itself for Homebase, or a page with a title.
         val list = fetch("$base/api/homebase", timeoutMs, 16 * 1024)
         if (list?.code == 200) {
             runCatching { Model.parseApps(base, list.body).second.firstOrNull() }.getOrNull()?.let { a ->
-                return Found(a.url, a.name, a.id.ifBlank { "homebase" }, a.subtitle, a.iconUrl, a.color, a.icon.ifBlank { "web" })
+                return Found(a.url, a.name, a.id.ifBlank { "homebase" }, a.subtitle, a.iconUrl, a.color, a.icon.ifBlank { "web" }, info?.optString("instance").orEmpty())
             }
         }
         val page = fetch("$base/", timeoutMs) ?: return health?.let { Found("$base/", "Web app", "web") }

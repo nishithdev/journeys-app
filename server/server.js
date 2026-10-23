@@ -167,6 +167,16 @@ applyConf();
 const haNotifyList = () => (conf.haNotify ? conf.haNotify.split(',') : []);
 const haEnabled = () => !!(conf.haUrl && HA_TOKEN && haNotifyList().length);
 
+// A random ID for this install, so the Homebase app knows that alpha5:8080 and 192.168.1.20:8080 are the same
+// Journeys (one tile, not two). Kept in DATA_DIR; if that isn't writable it lasts until the next restart.
+const INSTANCE_ID = (function () {
+  const file = path.join(DATA_DIR, 'instance-id');
+  try { const v = fs.readFileSync(file, 'utf8').trim(); if (/^[a-f0-9-]{8,64}$/.test(v)) return v; } catch (e) { /* first start */ }
+  const id = crypto.randomUUID();
+  try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.writeFileSync(file, id + '\n'); } catch (e) { /* read-only: per run */ }
+  return id;
+})();
+
 function storageWritable() {
   try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.accessSync(DATA_DIR, fs.constants.W_OK); return true; } catch (e) { return false; }
 }
@@ -828,7 +838,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (pathname === '/api/health') {
       return sendJson(res, 200, {
-        ok: true, app: 'journeys', version: VERSION, authRequired: !!APP_TOKEN, configured: !!conf.spreadsheetId,
+        ok: true, app: 'journeys', version: VERSION, instance: INSTANCE_ID, authRequired: !!APP_TOKEN, configured: !!conf.spreadsheetId,
         ha: { enabled: haEnabled(), nudgeHour: conf.nudgeHour },
         mcp: { path: '/mcp', tools: mcp.allTools().length },
         addons: [goals.addon()]

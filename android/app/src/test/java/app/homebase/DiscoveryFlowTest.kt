@@ -50,6 +50,13 @@ class DiscoveryFlowTest {
         waitForText("port 3000")
         shot("d1-found")
 
+        // The same machine under another name (like Tailscale vs Wi-Fi): still one entry each, with both addresses.
+        compose.onNode(hasSetTextAction()).performTextReplacement("localhost")
+        waitForText("also 127.0.0.1")
+        assertEquals(1, compose.onAllNodesWithText("Life Quest").fetchSemanticsNodes().size)
+        assertEquals(1, compose.onAllNodes(hasText("port 8080", substring = true)).fetchSemanticsNodes().size)
+        shot("d1u-unified")
+
         compose.onNode(hasText("port 8080", substring = true)).performScrollTo().performClick()
         // (A token can't be saved here: the test runner has no Android Keystore. Point this at a Journeys without APP_TOKEN.)
         waitForText("ALSO RUNNING ON")
