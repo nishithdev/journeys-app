@@ -756,6 +756,13 @@ const server = http.createServer(async (req, res) => {
   try {
     if (pathname === '/healthz') return send(res, 200, { 'Content-Type': 'text/plain' }, 'ok\n');
     if (pathname === '/mcp') return await mcp.handleHttp(req, res, { authorized, readBody, allowedOrigins: MCP_ALLOWED_ORIGINS });
+    // MCP clients (e.g. mcp-remote) look here for OAuth sign-in. We use a fixed token instead, so say "none"
+    // with a real 404, not the app's page (which they'd fail to parse as JSON).
+    if (pathname.startsWith('/.well-known/')) return sendJson(res, 404, { error: 'not_found', error_description: 'This server uses a bearer token (APP_TOKEN), not OAuth.' });
+    // After a rejected token, mcp-remote tries to register for OAuth here. Answer with the real reason.
+    if (pathname === '/register' || pathname === '/authorize' || pathname === '/token') {
+      return sendJson(res, 400, { error: 'invalid_client_metadata', error_description: 'Wrong or missing access token. Send the header "Authorization: Bearer <APP_TOKEN>" with the APP_TOKEN from the server\'s .env.' });
+    }
     if (pathname === '/api/health') {
       return sendJson(res, 200, {
         ok: true, app: 'journeys', version: VERSION, authRequired: !!APP_TOKEN, configured: !!conf.spreadsheetId,
