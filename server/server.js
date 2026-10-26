@@ -366,6 +366,30 @@ async function readCached(maxAgeMs) {
   return readAll();
 }
 
+// Opening the app shouldn't wait on Google: a read answers from the saved copy at once (marked stale) and
+// refreshes it in the background; the app then asks once more with fresh: true and gets the new copy.
+const FRESH_MS = 15 * 1000;          // younger than this counts as fresh
+const SERVE_STALE_MS = 6 * 3600e3;   // older than this is read again before answering
+let refreshing = null;
+function refreshSoon() {
+  if (!refreshing) {
+    refreshing = readAll().catch((e) => { console.warn(`[sheet] background refresh failed: ${e.message}`); })
+      .finally(() => { refreshing = null; });
+  }
+  return refreshing;
+}
+async function readForApp(fresh) {
+  const age = cache ? Date.now() - cache.at : Infinity;
+  if (fresh) {
+    if (refreshing) await refreshing;
+    if (!cache || Date.now() - cache.at > 2000) await readAll(); // the background one failed, or there was none
+    return { data: cache.d, stale: false };
+  }
+  if (age < FRESH_MS) return { data: cache.d, stale: false };
+  if (age < SERVE_STALE_MS) { refreshSoon(); return { data: cache.d, stale: true }; }
+  return { data: await readAll(), stale: false };
+}
+
 // ---------- changes ----------
 const newId = (p) => p + crypto.randomBytes(5).toString('hex');
 const clean = (v, max) => str(v).trim().slice(0, max);
@@ -449,7 +473,10 @@ const publicData = (d) => ({ journeys: d.journeys, steps: d.steps, sheetUrl: she
 async function handleApi(body) {
   if (!body || typeof body.action !== 'string') throw userError('Missing action.');
   await ensureSetup();
-  if (body.action === 'read') return { result: null, data: publicData(await readAll()) };
+  if (body.action === 'read') {
+    const r = await readForApp(!!body.fresh);
+    return r.stale ? { result: null, data: publicData(r.data), stale: true } : { result: null, data: publicData(r.data) };
+  }
   return exclusive(async () => {
     const d = await readAll(); // fresh read, so edits made directly in the Sheet are kept
     const result = apply(body, d);
@@ -818,7 +845,14 @@ function serveStatic(req, res, pathname) {
     }
     const ext = path.extname(file);
     const cacheCtl = rel.startsWith('/icons/') ? 'public, max-age=604800' : 'no-cache';
-    res.writeHead(200, Object.assign({}, SECURITY_HEADERS, { 'Content-Type': TYPES[ext] || 'application/octet-stream', 'Content-Length': st.size, 'Cache-Control': cacheCtl }));
+    // With an ETag the phone keeps its copy and only checks "still the same?" (a tiny 304), even on plain http
+    // where the offline service worker can't run. Changed files get a new ETag, so updates still arrive.
+    const etag = `W/"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`;
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, Object.assign({}, SECURITY_HEADERS, { ETag: etag, 'Cache-Control': cacheCtl }));
+      return res.end();
+    }
+    res.writeHead(200, Object.assign({}, SECURITY_HEADERS, { 'Content-Type': TYPES[ext] || 'application/octet-stream', 'Content-Length': st.size, 'Cache-Control': cacheCtl, ETag: etag }));
     if (req.method === 'HEAD') return res.end();
     fs.createReadStream(file).pipe(res);
   });

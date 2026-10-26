@@ -56,6 +56,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.homebase.AppStatus
+import app.homebase.MainActivity
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -73,7 +75,7 @@ import app.homebase.Link
 import app.homebase.Screen
 
 @Composable
-fun LauncherScreen(state: HomebaseState) {
+fun LauncherScreen(state: HomebaseState, activity: MainActivity) {
     var adding by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<HomeApp?>(null) }
     // Keep the running dots fresh while the launcher is showing.
@@ -82,6 +84,12 @@ fun LauncherScreen(state: HomebaseState) {
         state.startStatusLoop()
         state.lookForNewApps() // apps running next to your server, offered below
         onDispose { state.stopStatusLoop(); state.stopLanDiscovery() }
+    }
+    // Load the app you open most in the background, so tapping it shows a page that's already there.
+    LaunchedEffect(state.link, state.apps) {
+        if (state.link != Link.Connected) return@LaunchedEffect
+        delay(1_200)
+        state.favouriteApp()?.let { preloadApp(activity, state, it) }
     }
     @Suppress("UNUSED_VARIABLE") val tick = state.hiddenTick
     val fresh = state.newFound

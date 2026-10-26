@@ -269,9 +269,16 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
         }
     }
 
+    /** Opens an app. Its loading screen shows the steps, and says plainly what's wrong if it can't open. */
     fun openApp(id: String) {
-        val offline = link == Link.TailscaleOff || link == Link.Unreachable
-        screen = if (offline && store.warnTailscale) Screen.Offline(id) else Screen.App(id)
+        current?.let { store.countOpen(it.url, id) }
+        screen = Screen.App(id)
+    }
+
+    /** The app you open most (at least twice), worth loading before you tap it. */
+    fun favouriteApp(): HomeApp? {
+        val s = current ?: return null
+        return apps.maxByOrNull { store.opens(s.url, it.id) }?.takeIf { store.opens(s.url, it.id) >= 2 }
     }
 
     fun switchServer(s: Server) {
@@ -310,6 +317,7 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
     fun forgetCurrent() {
         val s = current ?: return
         store.forget(s.url)
+        Snapshots.forget(ctx, s.url)
         servers = store.servers
         destroyWebViews()
         val next = servers.find { it.url == store.currentUrl }

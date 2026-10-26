@@ -23,6 +23,7 @@ class UnifyTest {
         assertEquals(2, Unify.reach("http://10.0.0.4:8080"))
         assertEquals(2, Unify.reach("http://alpha5.local:8080"))
         assertEquals(1, Unify.reach("http://8.8.8.8"))
+        assertEquals(2, Unify.reach("http://localhost:8080"))
     }
 
     @Test fun mergeKeepsTheTailscaleAddressFirst() {
@@ -60,8 +61,7 @@ class UnifyTest {
             while (state.scanning > 0 && System.currentTimeMillis() < until) { Thread.sleep(50); ShadowLooper.idleMainLooper() }
             assertEquals(state.found.toString(), 1, state.found.size)
             val f = state.found.single()
-            assertEquals("http://localhost:${lq.port}/", f.url)
-            assertEquals(listOf("http://127.0.0.1:${lq.port}/"), f.alts)
+            assertEquals(setOf("http://localhost:${lq.port}/", "http://127.0.0.1:${lq.port}/"), f.urls.toSet())
             assertEquals(setOf("http://localhost:${lq.port}", "http://127.0.0.1:${lq.port}"), state.aliases("http://127.0.0.1:${lq.port}/").map { it.trimEnd('/') }.toSet())
         }
     }

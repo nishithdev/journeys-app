@@ -67,6 +67,7 @@ object Unify {
     fun reach(url: String): Int {
         val h = Model.host(url).lowercase().trim('[', ']')
         return when {
+            h == "localhost" || h.startsWith("127.") -> 2 // this phone itself
             h.endsWith(".ts.net") || TAILNET_IP.matches(h) -> 0
             h.endsWith(".local") || PRIVATE_IP.matches(h) || h.contains(':') -> 2
             !h.contains('.') -> 0 // a MagicDNS short name like "alpha5"

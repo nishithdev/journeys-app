@@ -78,7 +78,7 @@ fun HomebaseRoot(state: HomebaseState, activity: MainActivity) {
         when (val s = state.screen) {
             is Screen.Setup -> SetupScreen(state, s.prefill)
             is Screen.Check -> CheckScreen(state, s.url)
-            Screen.Launcher -> LauncherScreen(state)
+            Screen.Launcher -> LauncherScreen(state, activity)
             is Screen.App -> AppScreen(state, activity, s.appId)
             is Screen.Offline -> OfflineScreen(state, s.appId)
             Screen.Settings -> SettingsScreen(state, activity)

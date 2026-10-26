@@ -55,6 +55,10 @@ class Store(context: Context) {
     fun hideFound(serverUrl: String, keys: Collection<String>) =
         p.edit().putStringSet("hidden:$serverUrl", hiddenFound(serverUrl) + keys).apply()
 
+    /** How often each app was opened, so Homebase can load your favourite ahead of time. */
+    fun opens(serverUrl: String, appId: String): Int = p.getInt("opens:$serverUrl:$appId", 0)
+    fun countOpen(serverUrl: String, appId: String) = p.edit().putInt("opens:$serverUrl:$appId", opens(serverUrl, appId) + 1).apply()
+
     fun forget(serverUrl: String) {
         servers = servers.filter { it.url != serverUrl }
         p.edit().remove("token:$serverUrl").remove("apps:$serverUrl").remove("manual:$serverUrl").remove("hidden:$serverUrl").apply()

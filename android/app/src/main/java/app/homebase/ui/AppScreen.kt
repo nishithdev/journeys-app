@@ -13,6 +13,33 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import android.os.SystemClock
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import app.homebase.OpenStep
+import app.homebase.Opening
+import app.homebase.Problem
+import app.homebase.Snapshots
+import app.homebase.StepState
+import app.homebase.Tailscale
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -81,21 +108,97 @@ import app.homebase.Screen
 fun AppScreen(state: HomebaseState, activity: MainActivity, appId: String) {
     val app = state.app(appId)
     if (app == null) { state.screen = Screen.Launcher; return }
+    val ctx = LocalContext.current
     var progress by remember { mutableIntStateOf(100) }
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
-    val web = remember(app.id) {
-        state.webViews.getOrPut(app.id) { createWebView(activity, state, app) }
-    }
-    // Progress and errors come from the WebView's clients; point them at this screen.
-    val hooks = web.tag as? Hooks
-    // Until the page has drawn something, show a loading screen in the app's colour instead of a blank WebView.
-    var shown by remember(web) { mutableStateOf(hooks?.shown ?: true) }
+    val web = remember(app.id) { webViewFor(activity, state, app) }
+    val hooks = web.tag as Hooks
+    val serverUrl = state.current?.url ?: app.url
+    val appOrigin = Model.origin(app.url) ?: app.url
+    val isJourneys = app.icon == "journeys" || app.id == "journeys"
+
+    // ---- what the loading screen shows
+    var ready by remember(web) { mutableStateOf(hooks.ready) }
+    var tailscale by remember(web) { mutableStateOf(StepState.Waiting) }
+    var server by remember(web) { mutableStateOf(StepState.Waiting) }
+    var serverMs by remember(web) { mutableStateOf(0L) }
+    var page by remember(web) { mutableStateOf(if (hooks.ready) StepState.Done else StepState.Waiting) }
+    var data by remember(web) { mutableStateOf(if (hooks.ready) StepState.Done else StepState.Waiting) }
+    var problem by remember(web) { mutableStateOf<Problem?>(null) }
+    var attempt by remember(web) { mutableIntStateOf(0) }
+    val snapshot = remember(web) { if (hooks.ready) null else Snapshots.load(ctx, serverUrl, app.id) }
+
     remember(web) {
         (web.webChromeClient as? HomebaseChrome)?.onProgress = { progress = it }
-        hooks?.onMainFrameError = { if (state.store.warnTailscale && state.link != Link.Connected) state.screen = Screen.Offline(app.id) }
-        hooks?.onShown = { shown = true }
+        hooks.onMainFrameError = { if (!hooks.ready) attempt++ } // look again at once, don't wait for a timeout
         true
+    }
+
+    // Steps 1 and 2: Tailscale, then the server. On trouble, say what's wrong and keep trying every 5 seconds.
+    LaunchedEffect(web, attempt) {
+        if (hooks.ready) return@LaunchedEffect
+        val checkTs = state.store.warnTailscale && Opening.needsTailscale(app.url)
+        val vpn = Tailscale.vpnOn(ctx)
+        // Tailscale off isn't a failure yet: the name may work on home Wi-Fi too. Only the server's answer decides.
+        tailscale = if (!checkTs) StepState.Skipped else if (vpn) StepState.Done else StepState.Working
+        server = StepState.Working
+        val ms = Opening.reach(app.url)
+        if (ms != null) {
+            server = StepState.Done; serverMs = ms; problem = null
+            if (tailscale == StepState.Working) tailscale = StepState.Skipped // reached without it
+            if (page == StepState.Waiting) page = StepState.Working
+            return@LaunchedEffect
+        }
+        server = StepState.Failed
+        if (tailscale == StepState.Working) tailscale = StepState.Failed
+        problem = Opening.diagnose(ctx, app, state.current, state.store.warnTailscale)
+        while (problem != null && !hooks.ready) {
+            delay(5_000)
+            val p = Opening.diagnose(ctx, app, state.current, state.store.warnTailscale)
+            if (p == null) {
+                problem = null
+                web.reload() // it's back: load the page again instead of waiting on the failed one
+                attempt++
+                return@LaunchedEffect
+            }
+            problem = p
+        }
+    }
+
+    // Steps 3 and 4: the app's page draws its first screen, then (Journeys) gets your data.
+    LaunchedEffect(web) {
+        if (hooks.ready) return@LaunchedEffect
+        val script = Opening.pageScript(appOrigin)
+        var drawnAt = 0L
+        while (true) {
+            val raw = suspendCancellableCoroutine<String?> { c -> web.evaluateJavascript(script) { c.resume(it) } }
+            val ps = Opening.parsePage(raw)
+            if (ps.here && ps.loaded && page != StepState.Done) { page = if (ps.drawn) StepState.Done else StepState.Working }
+            if (ps.here && ps.loaded && ps.drawn) {
+                page = StepState.Done
+                if (drawnAt == 0L) drawnAt = SystemClock.elapsedRealtime()
+                if (!isJourneys) data = StepState.Skipped
+                else data = if (ps.dataDone) StepState.Done else StepState.Working
+                // The app has drawn: show it. (Journeys shows its own "Syncing…" for the rest.)
+                if (!hooks.ready) { hooks.ready = true; ready = true; problem = null }
+                if (data != StepState.Working || SystemClock.elapsedRealtime() - drawnAt > 15_000) break
+            }
+            delay(200)
+        }
+    }
+
+    // Keep a picture of the last screen for next time (when you leave the app or Homebase).
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(web) {
+        fun keep() {
+            if (!hooks.ready) return
+            val bmp = Snapshots.capture(web) ?: return
+            snapshotScope.launch { Snapshots.save(ctx, serverUrl, app.id, bmp) }
+        }
+        val obs = LifecycleEventObserver { _, e -> if (e == Lifecycle.Event.ON_STOP) keep() }
+        lifecycle.addObserver(obs)
+        onDispose { keep(); lifecycle.removeObserver(obs) }
     }
 
     BackHandler {
@@ -111,10 +214,16 @@ fun AppScreen(state: HomebaseState, activity: MainActivity, appId: String) {
             Column(Modifier.weight(1f)) {
                 Text(app.name, color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val ok = state.link == Link.Connected
-                    Box(Modifier.size(7.dp).clip(CircleShape).background(if (ok) Color(0xFF3DDC97) else Color(0xFFFF8A7A)))
+                    val ok = problem == null && state.link == Link.Connected
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(if (ok) Color(0xFF3DDC97) else if (problem == null) Color(0xFFB7BDCC) else Color(0xFFFF8A7A)))
                     Text(
-                        (state.current?.name ?: "") + if (ok) " · connected" else if (state.link == Link.Checking) " · checking" else " · offline",
+                        (state.current?.name ?: "") + when {
+                            problem != null -> " · can't reach"
+                            !ready -> " · opening"
+                            ok -> " · connected"
+                            state.link == Link.Checking -> " · checking"
+                            else -> " · offline"
+                        },
                         color = Color(0xFFB7BDCC), fontSize = 11.sp,
                     )
                 }
@@ -140,17 +249,55 @@ fun AppScreen(state: HomebaseState, activity: MainActivity, appId: String) {
                 factory = { (web.parent as? ViewGroup)?.removeView(web); web },
                 modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars),
             )
-            Cover(visible = !shown, app = app, server = state.current?.name ?: "", onReload = { web.reload() }, onBack = { state.screen = Screen.Launcher })
+            val steps = buildList {
+                if (tailscale != StepState.Skipped) add(OpenStep("Tailscale", tailscale, if (tailscale == StepState.Failed) "off" else ""))
+                add(OpenStep("Reaching ${state.current?.name ?: Model.serverName(app.url)}", server, if (server == StepState.Done) "$serverMs ms" else ""))
+                add(OpenStep("Loading ${app.name}", page))
+                if (isJourneys) add(OpenStep("Getting your data", data))
+            }
+            Cover(
+                visible = !ready, app = app, steps = steps, problem = problem, snapshot = snapshot,
+                onRetry = { problem = null; web.reload(); attempt++ },
+                onTailscale = { Tailscale.open(ctx) },
+                onBack = { state.screen = Screen.Launcher },
+            )
         }
     }
 }
 
+/** Opens Homebase's WebView for [app], or the one it already has (kept while you switch, or loaded ahead). */
+private fun webViewFor(activity: MainActivity, state: HomebaseState, app: HomeApp): WebView =
+    state.webViews.getOrPut(app.id) { createWebView(activity, state, app) }
+
+/**
+ * Loads [app] in the background (your most-opened app, while you're on the launcher),
+ * so tapping it shows a page that's already there.
+ */
+fun preloadApp(activity: MainActivity, state: HomebaseState, app: HomeApp) {
+    if (state.webViews.containsKey(app.id)) return
+    val web = webViewFor(activity, state, app)
+    val origin = Model.origin(app.url) ?: return
+    val hooks = web.tag as Hooks
+    // Nothing draws it yet, so ask the page itself when it's ready.
+    val script = Opening.pageScript(origin)
+    fun check(left: Int) {
+        if (left <= 0 || hooks.ready || state.webViews[app.id] !== web) return
+        web.evaluateJavascript(script) { raw ->
+            val ps = Opening.parsePage(raw)
+            if (ps.here && ps.loaded && ps.drawn) hooks.ready = true else web.postDelayed({ check(left - 1) }, 300)
+        }
+    }
+    web.postDelayed({ check(100) }, 300)
+}
+
+/** Snapshots are saved after the screen has gone, so they need a scope of their own. */
+private val snapshotScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
 /** Callbacks a WebView reports to whichever screen is showing it. */
 private class Hooks {
     var onMainFrameError: () -> Unit = {}
-    /** The page has drawn its first frame (it stays true for this WebView). */
-    var shown = false
-    var onShown: () -> Unit = {}
+    /** The app has drawn its first real screen (it stays true for this WebView). */
+    var ready = false
 }
 
 /** A line about the apps Homebase knows. */
@@ -162,29 +309,69 @@ private fun aboutApp(app: HomeApp): String? = when {
 }
 
 @Composable
-private fun Cover(visible: Boolean, app: HomeApp, server: String, onReload: () -> Unit, onBack: () -> Unit) {
+private fun Cover(
+    visible: Boolean, app: HomeApp, steps: List<OpenStep>, problem: Problem?, snapshot: Pair<Bitmap, Long>?,
+    onRetry: () -> Unit, onTailscale: () -> Unit, onBack: () -> Unit,
+) {
     AnimatedVisibility(visible = visible, enter = fadeIn(), exit = fadeOut(tween(260))) {
-        LoadingCover(app, server, onReload, onBack)
+        if (snapshot != null) SnapshotCover(app, snapshot, steps, problem, onRetry, onTailscale, onBack)
+        else LoadingCover(app, steps, problem, onRetry, onTailscale, onBack)
     }
 }
 
-/** Fills the wait while an app's page loads: its icon, colour and latest summary, then a hint if it takes long. */
+/** The last screen you saw, at once, with a small "Updating…" card showing the steps (or what's wrong). */
 @Composable
-private fun LoadingCover(app: HomeApp, server: String, onReload: () -> Unit, onBack: () -> Unit) {
-    var slow by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { delay(8_000); slow = true }
+private fun SnapshotCover(
+    app: HomeApp, snapshot: Pair<Bitmap, Long>, steps: List<OpenStep>, problem: Problem?,
+    onRetry: () -> Unit, onTailscale: () -> Unit, onBack: () -> Unit,
+) {
+    Box(Modifier.fillMaxSize().background(Color.White).clickable(enabled = false) {}.semantics { contentDescription = "${app.name}, your last view, updating" }) {
+        Image(
+            snapshot.first.asImageBitmap(), contentDescription = null,
+            modifier = Modifier.fillMaxSize(), contentScale = ContentScale.FillWidth, alignment = Alignment.TopCenter,
+        )
+        // Dim it a little so it reads as "not live yet".
+        Box(Modifier.fillMaxSize().background(Color.White.copy(alpha = if (problem != null) 0.45f else 0.25f)))
+        Column(
+            Modifier.align(Alignment.BottomCenter).padding(16.dp).fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp)).background(Ink).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            if (problem == null) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    CircularProgressIndicator(Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                    Text("Updating your last view", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                    Text(sinceText(snapshot.second), color = Color(0xFFB7BDCC), fontSize = 12.sp)
+                }
+                StepsRow(steps)
+            } else {
+                Text(problem.title, color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
+                Text("${problem.detail} Showing your last view from ${sinceText(snapshot.second)}.", color = Color(0xFFD5D9E3), fontSize = 13.sp, lineHeight = 19.sp)
+                ProblemButtons(problem, onRetry, onTailscale, onBack, Color.White)
+            }
+        }
+    }
+}
+
+/** No saved view yet: the app's colour, icon, what it is, its latest summary and the steps. */
+@Composable
+private fun LoadingCover(
+    app: HomeApp, steps: List<OpenStep>, problem: Problem?,
+    onRetry: () -> Unit, onTailscale: () -> Unit, onBack: () -> Unit,
+) {
     Column(
-        Modifier.fillMaxSize().background(Color(app.color)).clickable(enabled = false) {}.padding(32.dp)
+        Modifier.fillMaxSize().background(Color(app.color)).clickable(enabled = false) {}.verticalScroll(rememberScrollState()).padding(32.dp)
             .semantics { contentDescription = "Opening ${app.name}" },
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
     ) {
+        Spacer(Modifier.height(24.dp))
         Box(Modifier.size(96.dp).clip(RoundedCornerShape(28.dp)).background(Color.White.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
             AppIcon(app, size = 72.dp)
         }
         Text(app.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
         aboutApp(app)?.let { Text(it, color = Color.White.copy(alpha = 0.75f), fontSize = 14.sp, textAlign = TextAlign.Center, lineHeight = 20.sp) }
         // Something to read while it loads: the app's own summary from the launcher tile.
-        if (app.subtitle.isNotBlank() || app.badge > 0) Column(
+        if (problem == null && (app.subtitle.isNotBlank() || app.badge > 0)) Column(
             Modifier.clip(RoundedCornerShape(16.dp)).background(Color.White.copy(alpha = 0.12f)).padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -194,18 +381,84 @@ private fun LoadingCover(app: HomeApp, server: String, onReload: () -> Unit, onB
             )
             if (app.subtitle.isNotBlank()) Text(app.subtitle, color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp, textAlign = TextAlign.Center)
         }
-        LinearProgressIndicator(
-            modifier = Modifier.width(140.dp).height(4.dp).clip(RoundedCornerShape(2.dp)),
-            color = Color.White, trackColor = Color.White.copy(alpha = 0.2f),
-        )
-        Text(
-            if (slow) "Still loading. Your server is answering slowly, or Tailscale is reconnecting." else if (server.isNotBlank()) "Opening on $server" else "Opening",
-            color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp, textAlign = TextAlign.Center, lineHeight = 19.sp,
-        )
-        if (slow) Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            TextButton(onClick = onReload) { Text("Reload", color = Color.White, fontWeight = FontWeight.Bold) }
-            TextButton(onClick = onBack) { Text("Back to apps", color = Color.White, fontWeight = FontWeight.Bold) }
+        if (problem == null) {
+            Column(
+                Modifier.clip(RoundedCornerShape(16.dp)).background(Color.Black.copy(alpha = 0.18f)).padding(horizontal = 18.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) { steps.forEach { StepLine(it) } }
+        } else {
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color.Black.copy(alpha = 0.22f)).padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(problem.title, color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 17.sp, textAlign = TextAlign.Center)
+                Text(problem.detail, color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp, lineHeight = 19.sp, textAlign = TextAlign.Center)
+                ProblemButtons(problem, onRetry, onTailscale, onBack, Color.White)
+            }
         }
+    }
+}
+
+@Composable
+private fun ProblemButtons(problem: Problem, onRetry: () -> Unit, onTailscale: () -> Unit, onBack: () -> Unit, color: Color) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (problem is Problem.TailscaleOff) TextButton(onClick = onTailscale) { Text("Open Tailscale", color = color, fontWeight = FontWeight.Bold) }
+        TextButton(onClick = onRetry) { Text("Try again", color = color, fontWeight = FontWeight.Bold) }
+        TextButton(onClick = onBack) { Text("Back to apps", color = color.copy(alpha = 0.8f)) }
+    }
+}
+
+/** "✓ Tailscale   ✓ Reaching alpha5 · 42 ms   ◌ Loading Journeys   · Getting your data" */
+@Composable
+private fun StepLine(step: OpenStep) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        StepMark(step.state, Modifier.size(18.dp))
+        Text(
+            step.label + if (step.note.isNotBlank()) " · ${step.note}" else "",
+            color = if (step.state == StepState.Waiting) Color.White.copy(alpha = 0.55f) else Color.White,
+            fontSize = 14.sp, fontWeight = if (step.state == StepState.Working) FontWeight.Bold else FontWeight.Normal,
+        )
+    }
+}
+
+@Composable
+private fun StepsRow(steps: List<OpenStep>) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        steps.forEach { s ->
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StepMark(s.state, Modifier.size(14.dp))
+                Text(
+                    s.label + if (s.note.isNotBlank()) " · ${s.note}" else "",
+                    color = if (s.state == StepState.Waiting) Color(0xFF7D8496) else Color(0xFFE7EAF1), fontSize = 12.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StepMark(st: StepState, modifier: Modifier) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        when (st) {
+            StepState.Done -> Box(Modifier.fillMaxSize().clip(CircleShape).background(Color(0xFF3DDC97)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Check, contentDescription = "done", tint = Ink, modifier = Modifier.fillMaxSize(0.75f))
+            }
+            StepState.Working -> CircularProgressIndicator(Modifier.fillMaxSize(), color = Color.White, strokeWidth = 2.dp)
+            StepState.Failed -> Box(Modifier.fillMaxSize().clip(CircleShape).background(Color(0xFFFF8A7A)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Close, contentDescription = "failed", tint = Ink, modifier = Modifier.fillMaxSize(0.75f))
+            }
+            else -> Box(Modifier.fillMaxSize(0.45f).clip(CircleShape).background(Color.White.copy(alpha = 0.35f)))
+        }
+    }
+}
+
+private fun sinceText(at: Long): String {
+    val mins = ((System.currentTimeMillis() - at) / 60_000).coerceAtLeast(0)
+    return when {
+        mins < 1 -> "just now"
+        mins < 60 -> "$mins min ago"
+        mins < 24 * 60 -> "${mins / 60} h ago"
+        else -> java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(at))
     }
 }
 
@@ -241,10 +494,6 @@ private fun createWebView(activity: MainActivity, state: HomebaseState, app: Hom
     // Behind the page while it loads: the app's colour, never a white flash.
     web.setBackgroundColor(app.color.toInt())
     web.webViewClient = object : WebViewClient() {
-        override fun onPageCommitVisible(view: WebView, url: String?) {
-            if (!hooks.shown) { hooks.shown = true; hooks.onShown() }
-        }
-
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val o = Model.origin(request.url.toString())
             if (o != null && o in inside) return false
@@ -261,8 +510,6 @@ private fun createWebView(activity: MainActivity, state: HomebaseState, app: Hom
 
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
             if (request.isForMainFrame) hooks.onMainFrameError()
-            // An error page is something to see: don't keep it hidden behind the cover.
-            if (request.isForMainFrame && !hooks.shown) { hooks.shown = true; hooks.onShown() }
         }
     }
     web.webChromeClient = HomebaseChrome(activity)

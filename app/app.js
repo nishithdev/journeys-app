@@ -241,6 +241,11 @@
       // Each change already answers with the whole Sheet, so only read when nothing was sent.
       return p && p.data ? p : api({ action: 'read' });
     }).then(function (p) {
+      // The server answered at once from its saved copy of the Sheet: show that now, then get the fresh one.
+      if (!p.stale || state.outbox.length) return p;
+      state.data = p.data; saveData(); setSync('syncing');
+      return api({ action: 'read', fresh: true });
+    }).then(function (p) {
       if (!state.outbox.length) { state.data = p.data; saveData(); }
       if (p.data.sheetUrl) { cfg.sheetUrl = p.data.sheetUrl; store(LS.config, cfg); }
       state.sync.last = new Date();

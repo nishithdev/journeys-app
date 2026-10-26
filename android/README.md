@@ -50,6 +50,15 @@ You can also add any such app as a server of its own in Homebase (`http://alpha5
 
 **On the launcher**, every tile has a dot: green when the app answers, red with "Not responding" when it doesn't, grey while checking. Homebase checks when you open it, when you come back to it, and every 30 seconds while the launcher is showing.
 
+## Opening an app
+
+- **Your last view, at once.** When you leave an app, Homebase keeps a picture of its screen (in its private storage, per server; removed when you forget the server). Next time it shows that straight away with "Updating your last view", and swaps in the live page as soon as the app has drawn.
+- **The steps, not a spinner:** Tailscale → reaching alpha5 (with how long it took) → loading the app → getting your data (Journeys). You can see which hop is slow.
+- **Your favourite app is ready before you tap it.** Homebase counts what you open; while you're on the launcher it loads the one you open most in the background.
+- **When something's wrong, it says what** within a few seconds: "Tailscale is off" (with Open Tailscale), "alpha5 isn't answering", or "Life Quest isn't running" (the server answers but the app doesn't). It keeps checking every 5 seconds and opens the app by itself when it's back. It tries the server before blaming Tailscale, since a name like alpha5 may work on home Wi-Fi without it.
+
+On the server side, Journeys answers from its saved copy of your Sheet straight away when that copy is older than 15 seconds, then refreshes it in the background (the app asks once more for the fresh one). Its page files carry an ETag, so the phone keeps them and only checks whether they changed.
+
 ## Make your own app show up
 
 Answer `GET /api/homebase` with JSON:

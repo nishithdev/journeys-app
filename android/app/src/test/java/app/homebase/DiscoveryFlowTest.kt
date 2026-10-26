@@ -52,7 +52,7 @@ class DiscoveryFlowTest {
 
         // The same machine under another name (like Tailscale vs Wi-Fi): still one entry each, with both addresses.
         compose.onNode(hasSetTextAction()).performTextReplacement("localhost")
-        waitForText("also 127.0.0.1")
+        compose.waitUntil(20_000) { compose.onAllNodesWithText("also 127.0.0.1", substring = true).fetchSemanticsNodes().size + compose.onAllNodesWithText("also localhost", substring = true).fetchSemanticsNodes().size >= 2 }
         assertEquals(1, compose.onAllNodesWithText("Life Quest").fetchSemanticsNodes().size)
         assertEquals(1, compose.onAllNodes(hasText("port 8080", substring = true)).fetchSemanticsNodes().size)
         shot("d1u-unified")
@@ -96,11 +96,29 @@ class DiscoveryFlowTest {
         waitForText("Not responding")
         shot("d4-status")
 
-        // Opening an app: a cover in its colour fills the wait, never a white page.
+        // Opening an app: its colour, what it is, and the steps (server reached, page loading…), never a white page.
         compose.onNode(hasText("Journeys") and hasText("journeys", substring = true, ignoreCase = true)).performClick()
-        waitForText("Opening on")
+        waitForText("Loading Journeys")
+        waitForText(" ms") // "Reaching 127.0.0.1 · 3 ms"
+        waitForText("Getting your data")
         shot("d5-opening")
-        compose.waitUntil(20_000) { compose.onAllNodesWithText("Still loading", substring = true).fetchSemanticsNodes().isNotEmpty() }
-        shot("d6-slow")
+
+        // An app whose server answers but the app doesn't: say so in a few seconds, with what to do.
+        compose.activity.state.screen = Screen.Launcher
+        waitForText("Add an app")
+        compose.onNode(hasText("Stopped app")).performClick()
+        waitForText("isn't running", 15_000)
+        waitForText("Try again")
+        shot("d6-app-down")
+
+        // Next time Life Quest opens, its last screen shows at once while the live page loads.
+        val lq = state.apps.first { it.name == "Life Quest" }
+        val bmp = android.graphics.Bitmap.createBitmap(400, 800, android.graphics.Bitmap.Config.ARGB_8888).apply { eraseColor(0xFF14151F.toInt()) }
+        kotlinx.coroutines.runBlocking { Snapshots.save(compose.activity, state.current!!.url, lq.id, bmp) }
+        compose.activity.state.screen = Screen.Launcher
+        waitForText("Add an app")
+        compose.onNode(hasText("Life Quest") and hasText("LV", substring = true)).performClick()
+        waitForText("Updating your last view")
+        shot("d7-last-view")
     }
 }
