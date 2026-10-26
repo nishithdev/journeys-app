@@ -9,6 +9,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.IOException
@@ -53,6 +55,63 @@ data class Found(
         id = "found-${host}-$port", name = name, url = url, color = color, icon = icon,
         subtitle = subtitle, iconUrl = iconUrl, manual = true,
     )
+}
+
+/**
+ * Looks for your server on the Wi-Fi network this phone is on (not over Tailscale): every address in the
+ * Wi-Fi's /24, on the server's port, asking /api/health and matching its install ID.
+ */
+object LocalScan {
+    /** The phone's own address on Wi-Fi (or Ethernet), ignoring the VPN. */
+    fun wifiAddress(ctx: android.content.Context): java.net.Inet4Address? {
+        val cm = ctx.getSystemService(android.net.ConnectivityManager::class.java) ?: return null
+        @Suppress("DEPRECATION")
+        for (n in cm.allNetworks) {
+            val caps = cm.getNetworkCapabilities(n) ?: continue
+            if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) continue
+            if (!caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) &&
+                !caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET)) continue
+            val lp = cm.getLinkProperties(n) ?: continue
+            lp.linkAddresses.map { it.address }.filterIsInstance<java.net.Inet4Address>().firstOrNull()?.let { return it }
+        }
+        return null
+    }
+
+    /** The other addresses in the same /24, nearest first (home servers usually sit low or near the phone). */
+    fun neighbours(me: java.net.Inet4Address): List<String> {
+        val b = me.address
+        val mine = b[3].toInt() and 0xFF
+        val base = "${b[0].toInt() and 0xFF}.${b[1].toInt() and 0xFF}.${b[2].toInt() and 0xFF}."
+        return (1..254).filter { it != mine }.sortedBy { minOf(it, kotlin.math.abs(it - mine)) }.map { base + it }
+    }
+
+    /**
+     * Finds which address on [hosts] runs the server: its /api/health must report the same [instance]
+     * (or, for a server without one, the same [app]). Checks [parallel] addresses at a time.
+     */
+    suspend fun find(hosts: List<String>, port: Int, scheme: String, instance: String, app: String, timeoutMs: Int = 700, parallel: Int = 48): String? =
+        kotlinx.coroutines.coroutineScope {
+            val sem = kotlinx.coroutines.sync.Semaphore(parallel)
+            val hit = kotlinx.coroutines.CompletableDeferred<String?>()
+            val jobs = hosts.map { h ->
+                launch {
+                    sem.acquire()
+                    try {
+                        if (hit.isCompleted) return@launch
+                        val origin = "$scheme://$h:$port"
+                        val r = runCatching { Net.get("$origin/api/health", timeoutMs = timeoutMs) }.getOrNull() ?: return@launch
+                        if (r.code != 200) return@launch
+                        val j = runCatching { JSONObject(r.body) }.getOrNull() ?: return@launch
+                        val same = if (instance.isNotBlank()) j.optString("instance") == instance else app.isNotBlank() && j.optString("app") == app
+                        if (same) hit.complete(origin)
+                    } finally { sem.release() }
+                }
+            }
+            launch { jobs.joinAll(); hit.complete(null) }
+            val found = hit.await()
+            jobs.forEach { it.cancel() }
+            found
+        }
 }
 
 /** One service seen at two addresses becomes one entry. */

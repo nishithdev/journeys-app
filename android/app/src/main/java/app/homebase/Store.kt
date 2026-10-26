@@ -59,6 +59,13 @@ class Store(context: Context) {
     fun opens(serverUrl: String, appId: String): Int = p.getInt("opens:$serverUrl:$appId", 0)
     fun countOpen(serverUrl: String, appId: String) = p.edit().putInt("opens:$serverUrl:$appId", opens(serverUrl, appId) + 1).apply()
 
+    /** The server's install ID, used to recognise it on home Wi-Fi when Tailscale is off. */
+    fun instance(serverUrl: String): String = p.getString("instance:$serverUrl", "") ?: ""
+    fun setInstance(serverUrl: String, id: String) { if (id.isNotBlank()) p.edit().putString("instance:$serverUrl", id).apply() }
+    /** Where the server answered on home Wi-Fi last time (tried first next time). */
+    fun lanAddress(serverUrl: String): String = p.getString("lan:$serverUrl", "") ?: ""
+    fun setLanAddress(serverUrl: String, origin: String) = p.edit().putString("lan:$serverUrl", origin).apply()
+
     fun forget(serverUrl: String) {
         servers = servers.filter { it.url != serverUrl }
         p.edit().remove("token:$serverUrl").remove("apps:$serverUrl").remove("manual:$serverUrl").remove("hidden:$serverUrl").apply()

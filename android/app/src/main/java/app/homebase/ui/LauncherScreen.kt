@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.homebase.AppStatus
 import app.homebase.MainActivity
+import app.homebase.Tailscale
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.filled.Close
@@ -87,7 +88,7 @@ fun LauncherScreen(state: HomebaseState, activity: MainActivity) {
     }
     // Load the app you open most in the background, so tapping it shows a page that's already there.
     LaunchedEffect(state.link, state.apps) {
-        if (state.link != Link.Connected) return@LaunchedEffect
+        if (state.link != Link.Connected && state.link != Link.HomeWifi) return@LaunchedEffect
         delay(1_200)
         state.favouriteApp()?.let { preloadApp(activity, state, it) }
     }
@@ -111,11 +112,14 @@ fun LauncherScreen(state: HomebaseState, activity: MainActivity) {
             }
         }
         item(span = { GridItemSpan(maxLineSpan) }) { ServerChip(state) }
+        if (state.link == Link.CheckingWifi) item(span = { GridItemSpan(maxLineSpan) }) {
+            Text("Checking the devices on your Wi-Fi for ${state.current?.name ?: "your server"}…", color = Muted, fontSize = 13.sp)
+        }
         if (fresh.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
             NewAppsBanner(fresh, host = state.current?.let { Model.host(it.url) } ?: "", onOpen = { reviewing = true })
         }
         items(state.apps, key = { it.id }) { app ->
-            AppTile(app, state.status[app.id] ?: AppStatus.Checking, onOpen = { state.openApp(app.id) }, onLongPress = { if (app.manual) removing = app })
+            AppTile(app, state.status[app.id] ?: AppStatus.Checking, offline = state.link == Link.TailscaleOff, viaWifi = state.urlFor(app) != app.url, onOpen = { state.openApp(app.id) }, onLongPress = { if (app.manual) removing = app })
         }
         item { AddTile { adding = true } }
         if (state.apps.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
@@ -216,11 +220,14 @@ private fun NewAppsSheet(
 @Composable
 private fun ServerChip(state: HomebaseState) {
     var open by remember { mutableStateOf(false) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     val s = state.current ?: return
     val (dot, halo, line) = when (state.link) {
         Link.Connected -> Triple(Good, GoodSoft, "Connected · ${state.linkMs} ms")
         Link.Checking, Link.Unknown -> Triple(Faint, Line, "Checking…")
-        Link.TailscaleOff -> Triple(Bad, BadSoft, "Tailscale is off")
+        Link.CheckingWifi -> Triple(Warn, WarnSoft, "Tailscale is off · looking on your Wi-Fi…")
+        Link.HomeWifi -> Triple(Good, WarnSoft, "Tailscale is off · using home Wi-Fi (${state.linkNote})")
+        Link.TailscaleOff -> Triple(Bad, BadSoft, "Tailscale is off · offline")
         Link.Unreachable -> Triple(Bad, BadSoft, "Can't reach the server")
         Link.NeedsToken -> Triple(Warn, WarnSoft, "Access token needed · open Settings")
     }
@@ -246,6 +253,9 @@ private fun ServerChip(state: HomebaseState) {
                     onClick = { open = false; if (srv.url != s.url) state.switchServer(srv) },
                 )
             }
+            if (state.link == Link.TailscaleOff || state.link == Link.CheckingWifi || state.link == Link.HomeWifi) DropdownMenuItem(
+                text = { Text("Open Tailscale", fontWeight = FontWeight.Bold) }, onClick = { open = false; Tailscale.open(ctx) },
+            )
             DropdownMenuItem(text = { Text("Check connection") }, onClick = { open = false; state.refresh() })
             DropdownMenuItem(text = { Text("+ Add a server", color = Accent, fontWeight = FontWeight.Bold) }, onClick = { open = false; state.screen = Screen.Setup() })
         }
@@ -254,10 +264,11 @@ private fun ServerChip(state: HomebaseState) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AppTile(app: HomeApp, status: AppStatus, onOpen: () -> Unit, onLongPress: () -> Unit) {
+private fun AppTile(app: HomeApp, status: AppStatus, offline: Boolean, viaWifi: Boolean, onOpen: () -> Unit, onLongPress: () -> Unit) {
+    val down = if (offline) "Offline · Tailscale is off" else "Not responding"
     val (dot, said) = when (status) {
-        AppStatus.Up -> Good to "Running"
-        AppStatus.Down -> Bad to "Not responding"
+        AppStatus.Up -> Good to if (viaWifi) "Running, on home Wi-Fi" else "Running"
+        AppStatus.Down -> Bad to down
         AppStatus.Checking -> Faint to "Checking"
     }
     Column(
@@ -279,7 +290,11 @@ private fun AppTile(app: HomeApp, status: AppStatus, onOpen: () -> Unit, onLongP
             Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Box(Modifier.padding(top = 4.dp).size(8.dp).clip(CircleShape).background(dot))
                 Text(
-                    if (status == AppStatus.Down) "Not responding" else app.subtitle.ifBlank { app.url.substringAfter("://").trimEnd('/') },
+                    when {
+                        status == AppStatus.Down -> down
+                        viaWifi && status == AppStatus.Up -> "On home Wi-Fi" + app.subtitle.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
+                        else -> app.subtitle.ifBlank { app.url.substringAfter("://").trimEnd('/') }
+                    },
                     color = if (status == AppStatus.Down) Bad else Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 )
             }

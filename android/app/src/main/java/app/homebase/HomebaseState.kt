@@ -25,7 +25,11 @@ sealed interface Screen {
 /** Whether an app on the launcher answers right now. */
 enum class AppStatus { Checking, Up, Down }
 
-enum class Link { Unknown, Checking, Connected, TailscaleOff, Unreachable, NeedsToken }
+/**
+ * The connection to the current server. With Tailscale off, Homebase looks for the server on your Wi-Fi first
+ * ([CheckingWifi]); found there it keeps your apps working through that address ([HomeWifi]); otherwise [TailscaleOff].
+ */
+enum class Link { Unknown, Checking, Connected, CheckingWifi, HomeWifi, TailscaleOff, Unreachable, NeedsToken }
 
 /** Everything the screens show, in one place. Survives screen changes; not process death (it reloads from [Store]). */
 class HomebaseState(val store: Store, private val ctx: Context, private val scope: CoroutineScope) {
@@ -34,7 +38,15 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
     var servers by mutableStateOf(store.servers)
     var current by mutableStateOf<Server?>(null)
     var apps by mutableStateOf<List<HomeApp>>(emptyList())
-    var link by mutableStateOf(Link.Unknown)
+    private var linkState by mutableStateOf(Link.Unknown)
+    /** The last few connection states, oldest first (e.g. Checking → CheckingWifi → HomeWifi). */
+    val linkTrail = ArrayDeque<Link>()
+    var link: Link
+        get() = linkState
+        set(v) {
+            if (v != linkState) { linkTrail.addLast(v); while (linkTrail.size > 10) linkTrail.removeFirst() }
+            linkState = v
+        }
     var linkMs by mutableStateOf(0L)
     var linkNote by mutableStateOf("")
 
@@ -42,6 +54,22 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
     var checkResult by mutableStateOf<Net.Check?>(null)
     var checking by mutableStateOf(false)
     var checkToken by mutableStateOf("")
+
+    /**
+     * While Tailscale is off but the server answers on home Wi-Fi: each Tailscale origin and the Wi-Fi origin to use
+     * instead (http://alpha5:8080 → http://192.168.1.20:8080). Empty when everything goes the normal way.
+     */
+    var routes by mutableStateOf<Map<String, String>>(emptyMap())
+    /** Bumps when [routes] change, so open apps reload at the right address. */
+    var routeVersion by mutableStateOf(0)
+
+    /** The address to use for [app] right now (its Wi-Fi address while on home Wi-Fi without Tailscale). */
+    fun urlFor(app: HomeApp): String = urlFor(app.url)
+    fun urlFor(url: String): String {
+        val o = Model.origin(url) ?: return url
+        val local = routes[o] ?: return url
+        return local + url.removePrefix(o)
+    }
 
     /** Running or not, per app id, from the last check (on refresh and every 30 s on the launcher). */
     var status by mutableStateOf<Map<String, AppStatus>>(emptyMap())
@@ -92,9 +120,15 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
         val list = apps
         if (list.isEmpty()) return
         status = list.associate { it.id to (status[it.id] ?: AppStatus.Checking) }
+        val v = routeVersion
         statusJob = scope.launch {
-            val results = list.map { a -> async { a.id to if (Probe.alive(a.url)) AppStatus.Up else AppStatus.Down } }.awaitAll()
-            status = results.toMap()
+            val results = list.map { a -> async { a.id to if (Probe.alive(urlFor(a))) AppStatus.Up else AppStatus.Down } }.awaitAll()
+            // Checked at an address that's no longer in use (Tailscale went off or came back meanwhile): check again.
+            when {
+                link == Link.CheckingWifi -> {} // still looking on Wi-Fi: it checks again when it knows where to look
+                v != routeVersion -> recheck = true
+                else -> status = results.toMap()
+            }
             if (recheck) { recheck = false; statusJob = null; checkApps() }
         }
     }
@@ -251,6 +285,8 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
         refreshJob = scope.launch {
             when (val r = Net.check(s.url, store.token(s.url))) {
                 is Net.Check.Ok -> {
+                    applyRoutes(emptyMap())
+                    store.setInstance(s.url, r.instance)
                     store.saveApps(s.url, r.apps)
                     apps = allApps(s.url)
                     link = Link.Connected
@@ -261,12 +297,88 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
                 }
                 Net.Check.NeedsToken, Net.Check.BadToken -> link = Link.NeedsToken
                 is Net.Check.Unreachable -> {
-                    link = if (!Tailscale.vpnOn(ctx)) Link.TailscaleOff else Link.Unreachable
                     linkNote = r.reason
-                    checkApps()
+                    if (Tailscale.vpnOn(ctx)) {
+                        applyRoutes(emptyMap())
+                        link = Link.Unreachable
+                        checkApps()
+                    } else tryHomeWifi(s)
                 }
             }
         }
+    }
+
+    /**
+     * Tailscale is off and the server's usual address doesn't answer: look for the same server on this Wi-Fi
+     * (where it answered last time, addresses it was found at, then the whole /24), and use it there if found.
+     */
+    private suspend fun tryHomeWifi(s: Server) {
+        link = Link.CheckingWifi
+        status = apps.associate { it.id to AppStatus.Checking }
+        val token = store.token(s.url)
+        val origin = Model.origin(s.url) ?: return run { link = Link.TailscaleOff }
+        val port = try { java.net.URL(s.url).let { if (it.port > 0) it.port else it.defaultPort } } catch (e: Exception) { 8080 }
+        val scheme = if (s.url.startsWith("https")) "https" else "http"
+        val instance = store.instance(s.url)
+        suspend fun works(o: String) = Net.check(o + s.url.removePrefix(origin), token) is Net.Check.Ok
+        // 1. Where it was last time, and any Wi-Fi address it was seen at.
+        val known = (listOf(store.lanAddress(s.url)) + aliases(s.url).filter { Unify.reach(it) == 2 }.mapNotNull { Model.origin(it) })
+            .filter { it.isNotBlank() && it != origin }.distinct()
+        var local = known.firstOrNull { works(it) }
+        // 2. Every address on this Wi-Fi.
+        if (local == null) {
+            val me = LocalScan.wifiAddress(ctx)
+            if (me != null) {
+                local = LocalScan.find(LocalScan.neighbours(me), port, scheme, instance, "journeys")
+                    ?.takeIf { works(it) }
+            }
+        }
+        if (local == null) {
+            applyRoutes(emptyMap())
+            link = Link.TailscaleOff
+            checkApps()
+            return
+        }
+        store.setLanAddress(s.url, local)
+        // Apps on the same machine move with it; others use a Wi-Fi address they were found at.
+        val lanHost = Model.host(local)
+        val serverHost = Model.host(s.url)
+        val r = mutableMapOf(origin to local)
+        for (a in apps) {
+            val o = Model.origin(a.url) ?: continue
+            if (o in r) continue
+            if (Model.host(a.url) == serverHost) r[o] = o.replaceFirst("://$serverHost", "://$lanHost")
+            else aliases(a.url).firstOrNull { Unify.reach(it) == 2 }?.let { Model.origin(it) }?.let { r[o] = it }
+        }
+        applyRoutes(r)
+        link = Link.HomeWifi
+        linkNote = lanHost
+        checkApps()
+    }
+
+    private fun applyRoutes(r: Map<String, String>) {
+        if (r == routes) return
+        // Apps loaded at the old address reload at the new one.
+        val changed = apps.filter { a -> Model.origin(a.url)?.let { routes[it] != r[it] } == true }
+        routes = r
+        changed.forEach { a -> if (screen != Screen.App(a.id)) webViews.remove(a.id)?.destroy() }
+        routeVersion++
+    }
+
+    // ---------- noticing network changes (Tailscale on/off, Wi-Fi joined or left) ----------
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    private val networkChanged = Runnable { if (current != null && screen !is Screen.Setup && screen !is Screen.Check) refresh() }
+    private val netCallback = object : android.net.ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: android.net.Network) = soon()
+        override fun onLost(network: android.net.Network) = soon()
+        override fun onCapabilitiesChanged(network: android.net.Network, caps: android.net.NetworkCapabilities) = soon()
+        private fun soon() { main.removeCallbacks(networkChanged); main.postDelayed(networkChanged, 800) }
+    }
+    private var watching = false
+    private fun watchNetwork(on: Boolean) {
+        val cm = ctx.getSystemService(android.net.ConnectivityManager::class.java) ?: return
+        if (on && !watching) { runCatching { cm.registerDefaultNetworkCallback(netCallback); watching = true } }
+        if (!on && watching) { runCatching { cm.unregisterNetworkCallback(netCallback) }; watching = false; main.removeCallbacks(networkChanged) }
     }
 
     /** Opens an app. Its loading screen shows the steps, and says plainly what's wrong if it can't open. */
@@ -339,9 +451,10 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
             }
         }
         if (current != null) refresh()
+        watchNetwork(true)
     }
 
-    fun onStop() { stoppedAt = SystemClock.elapsedRealtime() }
+    fun onStop() { stoppedAt = SystemClock.elapsedRealtime(); watchNetwork(false) }
 
     fun destroyWebViews() {
         webViews.values.forEach { it.destroy() }

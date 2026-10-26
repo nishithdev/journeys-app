@@ -37,7 +37,11 @@ object Net {
     }
 
     sealed interface Check {
-        data class Ok(val serverName: String, val apps: List<HomeApp>, val ms: Long, val isJourneys: Boolean, val https: Boolean) : Check
+        data class Ok(
+            val serverName: String, val apps: List<HomeApp>, val ms: Long, val isJourneys: Boolean, val https: Boolean,
+            /** The server's install ID, if it reports one: lets Homebase find the same server on Wi-Fi. */
+            val instance: String = "",
+        ) : Check
         data object NeedsToken : Check
         data object BadToken : Check
         data class Unreachable(val reason: String) : Check
@@ -63,7 +67,7 @@ object Net {
             200 -> {
                 val parsed = runCatching { Model.parseApps(base, list.body) }.getOrNull()
                 if (parsed != null && parsed.second.isNotEmpty()) {
-                    return Check.Ok(parsed.first ?: Model.serverName(base), parsed.second, health.ms, isJourneys, https)
+                    return Check.Ok(parsed.first ?: Model.serverName(base), parsed.second, health.ms, isJourneys, https, info?.optString("instance").orEmpty())
                 }
                 if (isJourneys) return Check.Unreachable("The server's app list couldn't be read")
             }
@@ -72,7 +76,7 @@ object Net {
         }
         // An older Journeys server without the app list: just Journeys.
         if (isJourneys) {
-            return if (list.code == 404) Check.Ok(Model.serverName(base), listOf(HomeApp("journeys", "Journeys", base, 0xFF2451D6, "journeys", injectToken = true)), health.ms, true, https)
+            return if (list.code == 404) Check.Ok(Model.serverName(base), listOf(HomeApp("journeys", "Journeys", base, 0xFF2451D6, "journeys", injectToken = true)), health.ms, true, https, info.optString("instance"))
             else Check.Unreachable("The server answered HTTP ${list.code}")
         }
         // Any other web server: whatever answers is one app.

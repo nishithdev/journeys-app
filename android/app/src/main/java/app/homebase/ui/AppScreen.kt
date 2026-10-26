@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.key
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -112,10 +113,12 @@ fun AppScreen(state: HomebaseState, activity: MainActivity, appId: String) {
     var progress by remember { mutableIntStateOf(100) }
     var menu by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
-    val web = remember(app.id) { webViewFor(activity, state, app) }
+    // A new address (e.g. home Wi-Fi while Tailscale is off) means a fresh page at that address.
+    val web = remember(app.id, state.routeVersion) { webViewFor(activity, state, app) }
+    val viaWifi = state.urlFor(app) != app.url
     val hooks = web.tag as Hooks
     val serverUrl = state.current?.url ?: app.url
-    val appOrigin = Model.origin(app.url) ?: app.url
+    val appOrigin = Model.origin(state.urlFor(app)) ?: app.url
     val isJourneys = app.icon == "journeys" || app.id == "journeys"
 
     // ---- what the loading screen shows
@@ -138,12 +141,13 @@ fun AppScreen(state: HomebaseState, activity: MainActivity, appId: String) {
     // Steps 1 and 2: Tailscale, then the server. On trouble, say what's wrong and keep trying every 5 seconds.
     LaunchedEffect(web, attempt) {
         if (hooks.ready) return@LaunchedEffect
-        val checkTs = state.store.warnTailscale && Opening.needsTailscale(app.url)
+        val target = state.urlFor(app)
+        val checkTs = state.store.warnTailscale && Opening.needsTailscale(target)
         val vpn = Tailscale.vpnOn(ctx)
         // Tailscale off isn't a failure yet: the name may work on home Wi-Fi too. Only the server's answer decides.
         tailscale = if (!checkTs) StepState.Skipped else if (vpn) StepState.Done else StepState.Working
         server = StepState.Working
-        val ms = Opening.reach(app.url)
+        val ms = Opening.reach(target)
         if (ms != null) {
             server = StepState.Done; serverMs = ms; problem = null
             if (tailscale == StepState.Working) tailscale = StepState.Skipped // reached without it
@@ -152,10 +156,12 @@ fun AppScreen(state: HomebaseState, activity: MainActivity, appId: String) {
         }
         server = StepState.Failed
         if (tailscale == StepState.Working) tailscale = StepState.Failed
-        problem = Opening.diagnose(ctx, app, state.current, state.store.warnTailscale)
+        val routed = app.copy(url = target)
+        val srv = state.current?.let { it.copy(url = state.urlFor(it.url)) }
+        problem = Opening.diagnose(ctx, routed, srv, state.store.warnTailscale)
         while (problem != null && !hooks.ready) {
             delay(5_000)
-            val p = Opening.diagnose(ctx, app, state.current, state.store.warnTailscale)
+            val p = Opening.diagnose(ctx, routed, srv, state.store.warnTailscale)
             if (p == null) {
                 problem = null
                 web.reload() // it's back: load the page again instead of waiting on the failed one
@@ -214,12 +220,13 @@ fun AppScreen(state: HomebaseState, activity: MainActivity, appId: String) {
             Column(Modifier.weight(1f)) {
                 Text(app.name, color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val ok = problem == null && state.link == Link.Connected
+                    val ok = problem == null && (state.link == Link.Connected || state.link == Link.HomeWifi)
                     Box(Modifier.size(7.dp).clip(CircleShape).background(if (ok) Color(0xFF3DDC97) else if (problem == null) Color(0xFFB7BDCC) else Color(0xFFFF8A7A)))
                     Text(
                         (state.current?.name ?: "") + when {
                             problem != null -> " · can't reach"
                             !ready -> " · opening"
+                            viaWifi -> " · on home Wi-Fi"
                             ok -> " · connected"
                             state.link == Link.Checking -> " · checking"
                             else -> " · offline"
@@ -245,13 +252,18 @@ fun AppScreen(state: HomebaseState, activity: MainActivity, appId: String) {
             if (progress < 100) LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxSize(), color = Accent, trackColor = Color(0xFF2A2F3B))
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            AndroidView(
-                factory = { (web.parent as? ViewGroup)?.removeView(web); web },
-                modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars),
-            )
+            key(web) {
+                AndroidView(
+                    factory = { (web.parent as? ViewGroup)?.removeView(web); web },
+                    modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars),
+                )
+            }
             val steps = buildList {
                 if (tailscale != StepState.Skipped) add(OpenStep("Tailscale", tailscale, if (tailscale == StepState.Failed) "off" else ""))
-                add(OpenStep("Reaching ${state.current?.name ?: Model.serverName(app.url)}", server, if (server == StepState.Done) "$serverMs ms" else ""))
+                add(OpenStep(
+                    "Reaching ${state.current?.name ?: Model.serverName(app.url)}" + if (viaWifi) " on home Wi-Fi" else "", server,
+                    if (server == StepState.Done) "$serverMs ms" else "",
+                ))
                 add(OpenStep("Loading ${app.name}", page))
                 if (isJourneys) add(OpenStep("Getting your data", data))
             }
@@ -266,8 +278,11 @@ fun AppScreen(state: HomebaseState, activity: MainActivity, appId: String) {
 }
 
 /** Opens Homebase's WebView for [app], or the one it already has (kept while you switch, or loaded ahead). */
-private fun webViewFor(activity: MainActivity, state: HomebaseState, app: HomeApp): WebView =
-    state.webViews.getOrPut(app.id) { createWebView(activity, state, app) }
+private fun webViewFor(activity: MainActivity, state: HomebaseState, app: HomeApp): WebView {
+    val want = Model.origin(state.urlFor(app))
+    state.webViews[app.id]?.let { w -> if ((w.tag as? Hooks)?.origin == want) return w; state.webViews.remove(app.id); w.destroy() }
+    return createWebView(activity, state, app.copy(url = state.urlFor(app))).also { state.webViews[app.id] = it }
+}
 
 /**
  * Loads [app] in the background (your most-opened app, while you're on the launcher),
@@ -276,7 +291,7 @@ private fun webViewFor(activity: MainActivity, state: HomebaseState, app: HomeAp
 fun preloadApp(activity: MainActivity, state: HomebaseState, app: HomeApp) {
     if (state.webViews.containsKey(app.id)) return
     val web = webViewFor(activity, state, app)
-    val origin = Model.origin(app.url) ?: return
+    val origin = Model.origin(state.urlFor(app)) ?: return
     val hooks = web.tag as Hooks
     // Nothing draws it yet, so ask the page itself when it's ready.
     val script = Opening.pageScript(origin)
@@ -298,6 +313,8 @@ private class Hooks {
     var onMainFrameError: () -> Unit = {}
     /** The app has drawn its first real screen (it stays true for this WebView). */
     var ready = false
+    /** The address this WebView was opened at (its Tailscale or home Wi-Fi origin). */
+    var origin: String? = null
 }
 
 /** A line about the apps Homebase knows. */
@@ -474,6 +491,7 @@ private fun createWebView(activity: MainActivity, state: HomebaseState, app: Hom
     WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
     val web = WebView(activity)
     val hooks = Hooks()
+    hooks.origin = Model.origin(app.url)
     web.tag = hooks
     with(web.settings) {
         javaScriptEnabled = true
@@ -483,7 +501,7 @@ private fun createWebView(activity: MainActivity, state: HomebaseState, app: Hom
         userAgentString = "$userAgentString Homebase/${BuildConfig.VERSION_NAME}"
     }
     // Pages that belong to this server (or this app) stay inside; anything else opens in the browser.
-    val inside = setOfNotNull(Model.origin(app.url), state.current?.url?.let { Model.origin(it) })
+    val inside = setOfNotNull(Model.origin(app.url), state.current?.url?.let { Model.origin(it) }, state.current?.url?.let { Model.origin(state.urlFor(it)) })
     val token = if (app.injectToken) state.token() else null
     val origin = Model.origin(app.url)
     if (token != null && origin != null) {

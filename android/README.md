@@ -50,6 +50,16 @@ You can also add any such app as a server of its own in Homebase (`http://alpha5
 
 **On the launcher**, every tile has a dot: green when the app answers, red with "Not responding" when it doesn't, grey while checking. Homebase checks when you open it, when you come back to it, and every 30 seconds while the launcher is showing.
 
+## When Tailscale is off
+
+Homebase notices straight away (it watches the phone's network, so turning Tailscale off or leaving Wi-Fi updates the launcher), and goes through it in order:
+
+1. **"Tailscale is off · looking on your Wi-Fi…"** It tries the address where your server answered on Wi-Fi last time, any Wi-Fi address it was found at, and then every device on this Wi-Fi (the /24, on the server's port), matching the server's install ID so it never picks the wrong machine.
+2. **"Tailscale is off · using home Wi-Fi (192.168.x.x)"** if it's there. Your apps keep working through that address, and tiles say "On home Wi-Fi". Apps on the same machine (like Life Quest on :3000) move with it.
+3. **"Tailscale is off · offline"** if it isn't. Tiles say "Offline · Tailscale is off", and the menu on the server chip has **Open Tailscale**.
+
+Turn Tailscale back on and Homebase switches back to the usual address by itself. (Each address keeps its own copy of what an app saves in the browser, like Journeys' offline queue; both sync with the same server.)
+
 ## Opening an app
 
 - **Your last view, at once.** When you leave an app, Homebase keeps a picture of its screen (in its private storage, per server; removed when you forget the server). Next time it shows that straight away with "Updating your last view", and swaps in the live page as soon as the app has drawn.
