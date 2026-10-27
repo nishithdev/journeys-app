@@ -66,6 +66,13 @@ class Store(context: Context) {
     fun lanAddress(serverUrl: String): String = p.getString("lan:$serverUrl", "") ?: ""
     fun setLanAddress(serverUrl: String, origin: String) = p.edit().putString("lan:$serverUrl", origin).apply()
 
+    /** This phone's random ID for the Homebase remote (so the server tells phones apart). Never changes. */
+    val deviceId: String
+        get() = p.getString("deviceId", null) ?: java.util.UUID.randomUUID().toString().also { p.edit().putString("deviceId", it).apply() }
+    /** Whether the server is a Journeys server (it hosts the Homebase remote). */
+    fun isJourneys(serverUrl: String): Boolean = p.getBoolean("journeys:$serverUrl", false)
+    fun setJourneys(serverUrl: String, yes: Boolean) = p.edit().putBoolean("journeys:$serverUrl", yes).apply()
+
     fun forget(serverUrl: String) {
         servers = servers.filter { it.url != serverUrl }
         p.edit().remove("token:$serverUrl").remove("apps:$serverUrl").remove("manual:$serverUrl").remove("hidden:$serverUrl").apply()

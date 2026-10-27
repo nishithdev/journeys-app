@@ -131,6 +131,16 @@ fun AppScreen(state: HomebaseState, activity: MainActivity, appId: String) {
     var problem by remember(web) { mutableStateOf<Problem?>(null) }
     var attempt by remember(web) { mutableIntStateOf(0) }
     val snapshot = remember(web) { if (hooks.ready) null else Snapshots.load(ctx, serverUrl, app.id) }
+    val openedAt = remember(web) { SystemClock.elapsedRealtime() }
+    remember(web) {
+        state.remote.event(
+            "app_open",
+            "${app.name}" + (if (hooks.ready) " (already loaded)" else if (snapshot != null) " (showing last view)" else "") + if (viaWifi) " via home Wi-Fi" else "",
+            mapOf("app" to app.id),
+        )
+        true
+    }
+    LaunchedEffect(problem) { problem?.let { state.remote.event("problem", "${app.name}: ${it.title}", mapOf("app" to app.id)) } }
 
     remember(web) {
         (web.webChromeClient as? HomebaseChrome)?.onProgress = { progress = it }
@@ -184,10 +194,22 @@ fun AppScreen(state: HomebaseState, activity: MainActivity, appId: String) {
             if (ps.here && ps.loaded && ps.drawn) {
                 page = StepState.Done
                 if (drawnAt == 0L) drawnAt = SystemClock.elapsedRealtime()
+                val dataBefore = data
                 if (!isJourneys) data = StepState.Skipped
                 else data = if (ps.dataDone) StepState.Done else StepState.Working
                 // The app has drawn: show it. (Journeys shows its own "Syncing…" for the rest.)
-                if (!hooks.ready) { hooks.ready = true; ready = true; problem = null }
+                if (!hooks.ready) {
+                    hooks.ready = true; ready = true; problem = null
+                    val ms = SystemClock.elapsedRealtime() - openedAt
+                    state.remote.event(
+                        "app_ready",
+                        "${app.name} drawn in ${"%.1f".format(ms / 1000.0)} s" + (if (serverMs > 0) " (server answered in $serverMs ms)" else "") + if (viaWifi) " via home Wi-Fi" else "",
+                        mapOf("app" to app.id, "ms" to ms, "server_ms" to serverMs),
+                    )
+                }
+                if (isJourneys && ps.dataDone && dataBefore != StepState.Done) {
+                    state.remote.event("app_data", "${app.name} synced its data in ${"%.1f".format((SystemClock.elapsedRealtime() - openedAt) / 1000.0)} s · ${ps.sync}", mapOf("app" to app.id))
+                }
                 if (data != StepState.Working || SystemClock.elapsedRealtime() - drawnAt > 15_000) break
             }
             delay(200)

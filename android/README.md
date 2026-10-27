@@ -69,6 +69,17 @@ Turn Tailscale back on and Homebase switches back to the usual address by itself
 
 On the server side, Journeys answers from its saved copy of your Sheet straight away when that copy is older than 15 seconds, then refreshes it in the background (the app asks once more for the fresh one). Its page files carry an ETag, so the phone keeps them and only checks whether they changed.
 
+## Claude can see and use Homebase (MCP)
+
+While Homebase is open it reports to your Journeys server: the connection (Tailscale, home Wi-Fi), each app and its dot, what's on screen, found apps, settings, and what happened (apps opened with how long each step took, apps going down, problems, connection changes). The Journeys MCP endpoint (`/mcp`, the one Claude already uses) gets four tools:
+
+- **homebase_state**: what the phone shows right now, and whether Homebase is open ("in use now") or when it was last seen.
+- **homebase_events**: the recent timeline.
+- **homebase_devices**: the phones that report (each has its own ID).
+- **homebase_do**: ask the phone to act: refresh, check apps, open an app, go to the launcher, reload an app, read an open app's page (title, address, sync status), add or hide a found app, add or remove an app, choose what opens on start, turn the Tailscale check on or off. Answers come back within a second while Homebase is open; otherwise the command waits until it's next opened.
+
+It can't change the access token, turn off the fingerprint lock or forget a server. Nothing private leaves the phone: no token, page contents or pictures. Reports go only to a Journeys server, with the same access token, and are kept in `DATA_DIR/homebase-devices.json` (the last 300 events per phone). The server side is `server/homebase-remote.js`, kept separate so it can move to its own service later.
+
 ## Make your own app show up
 
 Answer `GET /api/homebase` with JSON:

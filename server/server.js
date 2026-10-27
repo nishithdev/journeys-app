@@ -786,11 +786,14 @@ const goals = goalsAddon.init({
   NUDGE_CHECK_MS, STATIC_DIR
 });
 
+// ---------- Homebase remote: the Android app's live state, and asking it to do things ----------
+const remote = require('./homebase-remote')({ DATA_DIR, userError });
+
 // ---------- MCP (AI assistants) ----------
 const mcp = require('./mcp')({
   VERSION, ensureSetup, readAll, writeAll, apply, exclusive, stepsOf, history, journeyStatus,
   days, today, validIso, addDays, userError, AppError, sheetUrl,
-  extraTools: (helpers) => (goals.enabled() ? goals.mcpTools(helpers) : [])
+  extraTools: (helpers) => (goals.enabled() ? goals.mcpTools(helpers) : []).concat(remote.mcpTools(helpers))
 });
 
 // ---------- HTTP ----------
@@ -889,6 +892,10 @@ const server = http.createServer(async (req, res) => {
       if (route === 'GET /api/settings') return sendJson(res, 200, { ok: true, payload: settingsView() });
       // The Homebase Android app's launcher: apps on this server, with Journeys' badge. Plain JSON, no wrapper.
       if (route === 'GET /api/homebase') return sendJson(res, 200, await homebaseApps());
+      if (pathname.startsWith('/api/homebase/')) {
+        const handled = await remote.handle(route, req, res, { readJson, sendJson, url: new URL(req.url, 'http://x') });
+        if (handled !== false) return handled;
+      }
       if (route === 'POST /api/settings') return sendJson(res, 200, { ok: true, payload: await saveSettings(await readJson(req)) });
       if (pathname === '/api/goals' || pathname.startsWith('/api/goals/')) return await goals.handle(route, req, res, { readJson, sendJson });
       if (route === 'POST /api/ha/test') {

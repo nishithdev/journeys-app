@@ -36,6 +36,29 @@ object Net {
         }
     }
 
+    /** POSTs JSON. */
+    @Throws(IOException::class)
+    suspend fun post(url: String, json: String, token: String? = null, timeoutMs: Int = 8000): Response = withContext(Dispatchers.IO) {
+        val start = SystemClock.elapsedRealtime()
+        val c = URL(url).openConnection() as HttpURLConnection
+        try {
+            c.connectTimeout = timeoutMs
+            c.readTimeout = timeoutMs
+            c.requestMethod = "POST"
+            c.doOutput = true
+            c.setRequestProperty("Content-Type", "application/json")
+            c.setRequestProperty("Accept", "application/json")
+            if (!token.isNullOrBlank()) c.setRequestProperty("Authorization", "Bearer $token")
+            c.outputStream.use { it.write(json.toByteArray()) }
+            val code = c.responseCode
+            val stream = if (code >= 400) c.errorStream else c.inputStream
+            val body = stream?.bufferedReader()?.use { it.readText() } ?: ""
+            Response(code, body, SystemClock.elapsedRealtime() - start)
+        } finally {
+            c.disconnect()
+        }
+    }
+
     sealed interface Check {
         data class Ok(
             val serverName: String, val apps: List<HomeApp>, val ms: Long, val isJourneys: Boolean, val https: Boolean,

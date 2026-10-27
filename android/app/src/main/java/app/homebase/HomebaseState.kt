@@ -32,19 +32,25 @@ enum class AppStatus { Checking, Up, Down }
 enum class Link { Unknown, Checking, Connected, CheckingWifi, HomeWifi, TailscaleOff, Unreachable, NeedsToken }
 
 /** Everything the screens show, in one place. Survives screen changes; not process death (it reloads from [Store]). */
-class HomebaseState(val store: Store, private val ctx: Context, private val scope: CoroutineScope) {
+class HomebaseState(val store: Store, val ctx: Context, private val scope: CoroutineScope) {
     var screen by mutableStateOf<Screen>(Screen.Setup())
     var locked by mutableStateOf(false)
     var servers by mutableStateOf(store.servers)
     var current by mutableStateOf<Server?>(null)
     var apps by mutableStateOf<List<HomeApp>>(emptyList())
+    /** Reports to the server so an AI assistant can see and use Homebase (see Remote.kt). */
+    val remote = Remote(this, scope)
+
     private var linkState by mutableStateOf(Link.Unknown)
     /** The last few connection states, oldest first (e.g. Checking → CheckingWifi → HomeWifi). */
     val linkTrail = ArrayDeque<Link>()
     var link: Link
         get() = linkState
         set(v) {
-            if (v != linkState) { linkTrail.addLast(v); while (linkTrail.size > 10) linkTrail.removeFirst() }
+            if (v != linkState) {
+                linkTrail.addLast(v); while (linkTrail.size > 10) linkTrail.removeFirst()
+                remote.event("link", "${linkState.name} → ${v.name}")
+            }
             linkState = v
         }
     var linkMs by mutableStateOf(0L)
@@ -127,7 +133,16 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
             when {
                 link == Link.CheckingWifi -> {} // still looking on Wi-Fi: it checks again when it knows where to look
                 v != routeVersion -> recheck = true
-                else -> status = results.toMap()
+                else -> {
+                    val now = results.toMap()
+                    for ((id, st) in now) {
+                        val was = status[id]
+                        if (was != null && was != AppStatus.Checking && was != st) {
+                            remote.event("app_status", "${app(id)?.name ?: id}: ${if (st == AppStatus.Up) "running again" else "not responding"}", mapOf("app" to id))
+                        }
+                    }
+                    status = now
+                }
             }
             if (recheck) { recheck = false; statusJob = null; checkApps() }
         }
@@ -268,6 +283,8 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
         store.servers = servers
         store.currentUrl = url
         store.saveApps(url, result.apps)
+        store.setJourneys(url, result.isJourneys)
+        store.setInstance(url, result.instance)
         current = server
         apps = allApps(url)
         link = Link.Connected
@@ -287,6 +304,7 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
                 is Net.Check.Ok -> {
                     applyRoutes(emptyMap())
                     store.setInstance(s.url, r.instance)
+                    store.setJourneys(s.url, r.isJourneys)
                     store.saveApps(s.url, r.apps)
                     apps = allApps(s.url)
                     link = Link.Connected
@@ -452,9 +470,10 @@ class HomebaseState(val store: Store, private val ctx: Context, private val scop
         }
         if (current != null) refresh()
         watchNetwork(true)
+        remote.start()
     }
 
-    fun onStop() { stoppedAt = SystemClock.elapsedRealtime(); watchNetwork(false) }
+    fun onStop() { stoppedAt = SystemClock.elapsedRealtime(); watchNetwork(false); remote.stop() }
 
     fun destroyWebViews() {
         webViews.values.forEach { it.destroy() }
