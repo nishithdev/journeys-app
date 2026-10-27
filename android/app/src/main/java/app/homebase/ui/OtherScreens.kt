@@ -221,6 +221,33 @@ fun SettingsScreen(state: HomebaseState, activity: MainActivity) {
             }
         }
 
+        // Whether Claude can see Homebase (Homebase reports to the Journeys server; see Remote.kt).
+        SectionLabel("Claude access")
+        Panel {
+            val rs = state.remote.status
+            var now by remember { mutableStateOf(System.currentTimeMillis()) }
+            LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(1_000); now = System.currentTimeMillis() } }
+            val fresh = rs.problem.isBlank() && rs.lastOkAt > 0 && now - rs.lastOkAt < 90_000
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                StatusDot(if (fresh) Good else if (rs.problem.isNotBlank()) Bad else Faint, if (fresh) GoodSoft else if (rs.problem.isNotBlank()) BadSoft else Line)
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        when {
+                            fresh -> "Reporting · last sent ${((now - rs.lastOkAt) / 1000).coerceAtLeast(0)} s ago"
+                            rs.problem.isNotBlank() -> "Not reporting"
+                            else -> "Starting…"
+                        },
+                        fontWeight = FontWeight.Bold, fontSize = 15.sp,
+                    )
+                    Text(
+                        rs.problem.ifBlank { "While Homebase is open, Claude can see its state and ask it to act, through ${rs.server.ifBlank { s?.name ?: "your server" }}." },
+                        color = Muted, fontSize = 12.sp, lineHeight = 17.sp,
+                    )
+                }
+                TextButton(onClick = { state.remote.sendNow() }) { Text("Send now", fontWeight = FontWeight.Bold) }
+            }
+        }
+
         Spacer(Modifier.weight(1f))
         if (s != null) SecondaryButton("Forget this server", onClick = { confirmForget = true }, color = Color(0xFFB42318))
         Text("Homebase ${BuildConfig.VERSION_NAME} · your data stays on your server", fontSize = 12.sp, color = Faint, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp))

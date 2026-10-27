@@ -3,6 +3,8 @@ package app.homebase
 import android.os.Build
 import android.os.SystemClock
 import android.webkit.WebView
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -43,11 +45,22 @@ class Remote(private val state: HomebaseState, private val scope: CoroutineScope
         dirty = true
     }
 
+    /** What Settings shows under "Claude access": when the last report got through, or why it didn't. */
+    data class Status(val lastOkAt: Long = 0, val problem: String = "", val server: String = "")
+    var status by androidx.compose.runtime.mutableStateOf(Status())
+        private set
+
+    /** Servers that answered 404 (not a Journeys server, or an older one), and until when to leave them alone. */
+    private val unsupported = mutableMapOf<String, Long>()
+
     private fun base(): Pair<String, String?>? {
-        val s = state.current ?: return null
-        if (!state.store.isJourneys(s.url)) return null
+        val s = state.current ?: run { status = status.copy(problem = "No server yet"); return null }
+        if ((unsupported[s.url] ?: 0) > SystemClock.elapsedRealtime()) return null
         return state.urlFor(s.url).trimEnd('/') to state.store.token(s.url)
     }
+
+    /** Settings' "Send now". */
+    fun sendNow() { dirty = true; scope.launch { runCatching { send(foreground = true) } } }
 
     fun start() {
         if (jobs.any { it.isActive }) return
@@ -68,7 +81,11 @@ class Remote(private val state: HomebaseState, private val scope: CoroutineScope
             val now = SystemClock.elapsedRealtime()
             val fp = fingerprint()
             if (dirty || fp != lastSent || now - lastSentAt > 30_000) {
-                if (runCatching { send(foreground = true) }.getOrDefault(false)) { lastSent = fp; lastSentAt = now }
+                val ok = runCatching { send(foreground = true) }.getOrElse { e ->
+                    status = status.copy(problem = "Can't reach ${state.current?.name ?: "the server"}: ${e.message ?: e.javaClass.simpleName}")
+                    false
+                }
+                if (ok) { lastSent = fp; lastSentAt = now }
                 else delay(4_000) // server not reachable now: try again a little later
             }
             delay(1_000)
@@ -96,9 +113,18 @@ class Remote(private val state: HomebaseState, private val scope: CoroutineScope
                         .put("data", JSONObject(e.data.filterValues { it != null })))
                 }
             })
+        val name = state.current?.name ?: ""
         val r = Net.post("$b/api/homebase/report", body.toString(), token)
-        if (r.code == 404) { state.store.setJourneys(state.current?.url ?: "", false); return false } // an older Journeys
-        if (r.code != 200) { dirty = true; return false }
+        if (r.code == 404) {
+            // Not a Journeys server, or one from before this feature: leave it alone for 10 minutes.
+            state.current?.url?.let { unsupported[it] = SystemClock.elapsedRealtime() + 10 * 60_000 }
+            status = Status(status.lastOkAt, "$name doesn't take reports. It needs to be a Journeys server, updated (rebuilt) after October 27.", name)
+            return false
+        }
+        if (r.code == 401) { status = Status(status.lastOkAt, "$name didn't accept the access token. Check it in Settings.", name); dirty = true; return false }
+        if (r.code != 200) { status = Status(status.lastOkAt, "$name answered HTTP ${r.code}.", name); dirty = true; return false }
+        state.current?.url?.let { state.store.setJourneys(it, true) }
+        status = Status(System.currentTimeMillis(), "", name)
         val last = runCatching { JSONObject(r.body).optLong("last_seq", 0) }.getOrDefault(0L)
         sentSeq = maxOf(sentSeq, if (last > 0) last else pending.lastOrNull()?.seq ?: sentSeq)
         return true

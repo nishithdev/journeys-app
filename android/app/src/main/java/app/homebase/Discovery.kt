@@ -85,6 +85,29 @@ object LocalScan {
         return (1..254).filter { it != mine }.sortedBy { minOf(it, kotlin.math.abs(it - mine)) }.map { base + it }
     }
 
+    /** Ports worth checking on every device of a home network: Journeys, Life Quest, Home Assistant. */
+    val SWEEP_PORTS = listOf(8080, 3000, 8123)
+
+    /** Is something listening at [host]:[port]? A plain TCP connect, so a closed port costs almost nothing. */
+    suspend fun portOpen(host: String, port: Int, timeoutMs: Int = 400): Boolean = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        runCatching { java.net.Socket().use { it.connect(java.net.InetSocketAddress(host, port), timeoutMs); true } }.getOrDefault(false)
+    }
+
+    /**
+     * Every device on this Wi-Fi, on [ports]: whatever is listening is identified ([Probe.one]) and handed to [onFound].
+     * 253 addresses × 3 ports, 64 at a time: a few seconds.
+     */
+    suspend fun sweep(hosts: List<String>, ports: List<Int> = SWEEP_PORTS, parallel: Int = 64, onFound: (Found) -> Unit) =
+        kotlinx.coroutines.coroutineScope {
+            val sem = kotlinx.coroutines.sync.Semaphore(parallel)
+            hosts.flatMap { h -> ports.map { h to it } }.map { (h, p) ->
+                launch {
+                    sem.acquire()
+                    try { if (portOpen(h, p)) Probe.one("http://$h:$p", 1500)?.let(onFound) } finally { sem.release() }
+                }
+            }.joinAll()
+        }
+
     /**
      * Finds which address on [hosts] runs the server: its /api/health must report the same [instance]
      * (or, for a server without one, the same [app]). Checks [parallel] addresses at a time.

@@ -38,6 +38,7 @@ You can also add any such app as a server of its own in Homebase (`http://alpha5
 **On the connect screen**, Homebase lists what it finds, so you can tap instead of typing:
 - **Type a host name** (like `alpha5` or `100.64.0.5`) and it checks that machine's usual ports: 8080 (Journeys), 3000 (Life Quest), 8123 (Home Assistant), 80, 443, 3001, 5000, 8000, 8081, 8096, 2283, 8384, 8443, 8888, 9000, 9090, 19999 and 32400. Works over Tailscale too.
 - **Servers you've already saved** are checked the same way.
+- **Every device on your Wi-Fi** is checked on 8080, 3000 and 8123 when the connect screen opens (a few seconds). If that finds exactly one Journeys and you haven't typed anything, Homebase connects to it by itself after a short countdown you can cancel.
 - **On your Wi-Fi**, services that announce themselves show up by themselves, like Home Assistant does. Home Assistant already announces itself. For Journeys and Life Quest, copy the two files in `homelab/avahi/` to the Pi once:
   ```
   sudo cp homelab/avahi/*.service /etc/avahi/services/
@@ -77,6 +78,8 @@ While Homebase is open it reports to your Journeys server: the connection (Tails
 - **homebase_events**: the recent timeline.
 - **homebase_devices**: the phones that report (each has its own ID).
 - **homebase_do**: ask the phone to act: refresh, check apps, open an app, go to the launcher, reload an app, read an open app's page (title, address, sync status), add or hide a found app, add or remove an app, choose what opens on start, turn the Tailscale check on or off. Answers come back within a second while Homebase is open; otherwise the command waits until it's next opened.
+
+**Settings → Claude access** shows whether it's working: "Reporting · last sent 5 s ago", or why not (the server isn't Journeys or hasn't been rebuilt since October 27, the access token wasn't accepted, or the server can't be reached), with **Send now** to try straight away.
 
 It can't change the access token, turn off the fingerprint lock or forget a server. Nothing private leaves the phone: no token, page contents or pictures. Reports go only to a Journeys server, with the same access token, and are kept in `DATA_DIR/homebase-devices.json` (the last 300 events per phone). The server side is `server/homebase-remote.js`, kept separate so it can move to its own service later.
 

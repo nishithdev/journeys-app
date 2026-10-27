@@ -71,6 +71,7 @@ fun SetupScreen(state: HomebaseState, prefill: String) {
     DisposableEffect(Unit) {
         state.startLanDiscovery()
         state.scanKnownHosts()
+        state.sweepWifi() // every device on this Wi-Fi, for your servers
         onDispose { state.stopLanDiscovery() }
     }
     // Typing a name like "alpha5" checks that machine's common ports.
@@ -117,13 +118,43 @@ fun SetupScreen(state: HomebaseState, prefill: String) {
                 }
             }
         }
+        // First time on this Wi-Fi with exactly one Journeys found: connect to it (you can still cancel).
+        val journeys = state.found.filter { it.kind == "journeys" }
+        var autoTried by rememberSaveable { mutableStateOf(false) }
+        var autoTarget by remember { mutableStateOf<app.homebase.Found?>(null) }
+        LaunchedEffect(journeys.map { it.url }, state.scanning) {
+            val untouched = url.removePrefix("http://").isBlank()
+            if (autoTried || state.servers.isNotEmpty() || !untouched || state.scanning > 0 || journeys.size != 1) return@LaunchedEffect
+            autoTried = true
+            autoTarget = journeys.single()
+        }
+        // Its own countdown, so the search finishing doesn't cancel it.
+        LaunchedEffect(autoTarget) {
+            val f = autoTarget ?: return@LaunchedEffect
+            delay(2_500)
+            if (autoTarget == f) state.startCheck(f.url)
+        }
+        autoTarget?.let { f ->
+            Panel {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Accent)
+                    Column(Modifier.weight(1f)) {
+                        Text("Found Journeys on your Wi-Fi", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text("Connecting to ${f.where()}…", color = Muted, fontSize = 13.sp)
+                    }
+                    TextButton(onClick = { autoTarget = null }) { Text("Cancel", fontWeight = FontWeight.Bold) }
+                }
+            }
+        }
         FoundPanel(
             title = "Found on your network",
             items = state.found,
             scanning = state.scanning > 0,
-            empty = "Nothing found yet. Type your server's name, like alpha5, and Homebase checks its usual ports (8080, 3000, 8123…).",
+            empty = state.wifiSweep?.let { "Looking on your Wi-Fi ($it)…" }
+                ?: "Nothing found on this Wi-Fi. Type your server's name, like alpha5, and Homebase checks its usual ports (8080, 3000, 8123…).",
             onRescan = {
                 state.scanKnownHosts(force = true)
+                state.sweepWifi(force = true)
                 Model.normalizeUrl(url)?.let { state.scanHost(Model.host(it), force = true) }
             },
         ) { f -> FoundRow(f, onClick = { state.startCheck(f.url) }) }

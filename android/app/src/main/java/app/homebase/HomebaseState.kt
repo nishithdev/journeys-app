@@ -190,6 +190,23 @@ class HomebaseState(val store: Store, val ctx: Context, private val scope: Corou
         }
     }
 
+    /** "192.168.8.x" while every device on this Wi-Fi is being checked; null otherwise. */
+    var wifiSweep by mutableStateOf<String?>(null)
+    private var sweptAt = 0L
+
+    /** Checks every device on this Wi-Fi for Journeys, Life Quest and Home Assistant (at most once a minute). */
+    fun sweepWifi(force: Boolean = false) {
+        val me = LocalScan.wifiAddress(ctx) ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (wifiSweep != null || (!force && sweptAt > 0 && now - sweptAt < 60_000)) return
+        sweptAt = now
+        wifiSweep = me.hostAddress?.substringBeforeLast('.')?.let { "$it.x" } ?: "your Wi-Fi"
+        scanning++
+        scope.launch {
+            try { LocalScan.sweep(LocalScan.neighbours(me)) { addFound(it) } } finally { scanning--; wifiSweep = null }
+        }
+    }
+
     /** The hosts of the servers you've saved. */
     fun scanKnownHosts(force: Boolean = false) = servers.map { Model.host(it.url) }.distinct().forEach { scanHost(it, force) }
 
